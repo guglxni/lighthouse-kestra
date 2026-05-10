@@ -1,0 +1,34 @@
+id: deepdive
+namespace: company.team.lighthouse.serve
+description: |
+  On-demand deep dive hook — wire `scripts/deepdive_runner.py` or GPT-Researcher
+  to this flow from Kestra Apps / subflows.
+
+labels:
+  layer: serve
+
+inputs:
+  - id: topic_id
+    type: STRING
+    defaults: agentic-eng
+  - id: query
+    type: STRING
+    defaults: What are the open questions?
+
+tasks:
+  - id: note
+    type: io.kestra.plugin.core.log.Log
+    message: |
+      Deep dive queued (stub). Extend this flow to call `scripts/deepdive_runner.py`
+      inside `lighthouse/worker:latest`. topic={{ inputs.topic_id }} query={{ inputs.query }}
+
+triggers:
+  - id: webhook
+    type: io.kestra.plugin.core.trigger.Webhook
+    key: deepdive
+
+errors:
+  - id: log_failure
+    type: io.kestra.plugin.core.log.Log
+    level: ERROR
+    message: "deepdive failed: {{ errorLogs() }}"

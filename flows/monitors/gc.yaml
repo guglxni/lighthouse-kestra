@@ -1,0 +1,76 @@
+id: gc
+namespace: company.team.lighthouse.maintenance
+description: |
+  Nightly garbage collection — archives briefs older than 90 days to S3 (as
+  newline-delimited JSON), then prunes their embeddings to keep pgvector lean.
+  Documents themselves are kept (cheap) so we can rebuild indices later.
+
+labels:
+  layer: maintenance
+
+inputs:
+  - id: retention_days
+    type: INT
+    defaults: 90
+
+tasks:
+  - id: archive_briefs
+    type: io.kestra.plugin.jdbc.postgresql.Query
+    url: "jdbc:postgresql://{{ secret('POSTGRES_HOST') }}:{{ secret('POSTGRES_PORT') }}/{{ secret('POSTGRES_DB') }}"
+    username: "{{ secret('POSTGRES_USER') }}"
+    password: "{{ secret('POSTGRES_PASSWORD') }}"
+    sql: |
+      SELECT id::text, topic_id, date::text, markdown, clusters
+      FROM lh.briefs
+      WHERE created_at < now() - (interval '1 day' * {{ inputs.retention_days }});
+    fetchType: STORE
+
+  - id: upload_to_s3
+    type: io.kestra.plugin.aws.s3.Upload
+    runIf: "{{ outputs.archive_briefs.size > 0 }}"
+    accessKeyId: "{{ secret('AWS_ACCESS_KEY_ID') }}"
+    secretKeyId: "{{ secret('AWS_SECRET_ACCESS_KEY') }}"
+    region: "{{ secret('S3_REGION') }}"
+    bucket: "{{ secret('S3_BUCKET') }}"
+    key: "lighthouse/archive/briefs-{{ now() | date('yyyy-MM-dd') }}.ion"
+    from: "{{ outputs.archive_briefs.uri }}"
+
+  - id: prune_old_embeddings
+    type: io.kestra.plugin.jdbc.postgresql.Queries
+    url: "jdbc:postgresql://{{ secret('POSTGRES_HOST') }}:{{ secret('POSTGRES_PORT') }}/{{ secret('POSTGRES_DB') }}"
+    username: "{{ secret('POSTGRES_USER') }}"
+    password: "{{ secret('POSTGRES_PASSWORD') }}"
+    sql: |
+      DELETE FROM lh.embeddings
+      WHERE document_id IN (
+        SELECT id FROM lh.documents
+        WHERE fetched_at < now() - (interval '1 day' * {{ inputs.retention_days }})
+      );
+
+      DELETE FROM lh.briefs
+      WHERE created_at < now() - (interval '1 day' * {{ inputs.retention_days }});
+
+      DELETE FROM lh.chat_history
+      WHERE created_at < now() - interval '30 days';
+
+  - id: vacuum
+    type: io.kestra.plugin.jdbc.postgresql.Queries
+    url: "jdbc:postgresql://{{ secret('POSTGRES_HOST') }}:{{ secret('POSTGRES_PORT') }}/{{ secret('POSTGRES_DB') }}"
+    username: "{{ secret('POSTGRES_USER') }}"
+    password: "{{ secret('POSTGRES_PASSWORD') }}"
+    transaction: false
+    sql: |
+      VACUUM (ANALYZE) lh.documents;
+      VACUUM (ANALYZE) lh.embeddings;
+      VACUUM (ANALYZE) lh.briefs;
+
+triggers:
+  - id: nightly
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "0 3 * * *"
+
+errors:
+  - id: log_failure
+    type: io.kestra.plugin.core.log.Log
+    level: ERROR
+    message: "gc failed: {{ errorLogs() }}"

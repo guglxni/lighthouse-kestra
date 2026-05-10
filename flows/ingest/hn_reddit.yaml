@@ -1,0 +1,193 @@
+id: hn_reddit
+namespace: company.team.lighthouse.ingest
+description: |
+  Hacker News (Algolia search API) + Reddit (public JSON) ingest. Combines two
+  social sources into one flow because they share keyword/sub configs and a
+  single watermark cadence.
+
+labels:
+  topic: "{{ inputs.topic_id }}"
+  source: hn_reddit
+  layer: ingest
+
+inputs:
+  - id: topic_id
+    type: STRING
+    defaults: agentic-eng
+  - id: hn_min_points
+    type: INT
+    defaults: 50
+  - id: reddit_limit
+    type: INT
+    defaults: 50
+
+concurrency:
+  limit: 10
+  behavior: QUEUE
+
+taskDefaults:
+  - type: io.kestra.plugin.jdbc.postgresql.Queries
+    values:
+      url: "jdbc:postgresql://{{ secret('POSTGRES_HOST') }}:{{ secret('POSTGRES_PORT') }}/{{ secret('POSTGRES_DB') }}"
+      username: "{{ secret('POSTGRES_USER') }}"
+      password: "{{ secret('POSTGRES_PASSWORD') }}"
+
+tasks:
+  - id: load_profile
+    type: io.kestra.plugin.core.namespace.DownloadFiles
+    namespace: "{{ flow.namespace }}"
+    files:
+      - "topics/{{ inputs.topic_id }}.yaml"
+
+  - id: read_watermark
+    type: io.kestra.plugin.core.kv.Get
+    key: "topic:{{ inputs.topic_id }}:watermark:hn_reddit"
+    errorOnMissing: false
+
+  - id: fetch_social
+    type: io.kestra.plugin.scripts.python.Script
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      image: lighthouse/worker:latest
+    inputFiles:
+      profile.yaml: "{{ read('topics/' ~ inputs.topic_id ~ '.yaml') }}"
+    outputFiles:
+      - documents.json
+      - watermark.txt
+    env:
+      WATERMARK: "{{ outputs.read_watermark.value ?? '' }}"
+      REDDIT_USER_AGENT: "{{ secret('REDDIT_USER_AGENT') }}"
+    script: |
+      import json, yaml, os, time
+      from datetime import datetime, timezone, timedelta
+      import httpx
+
+      profile = yaml.safe_load(open("profile.yaml"))
+      sources = profile.get("sources", {}) or {}
+      hn_keywords = sources.get("hn_keywords", []) or []
+      reddit_subs = sources.get("reddit_subs", []) or []
+      ua = os.environ.get("REDDIT_USER_AGENT", "lighthouse-research/0.1")
+
+      watermark = os.environ.get("WATERMARK", "")
+      try:
+          wm = datetime.fromisoformat(watermark.replace("Z", "+00:00")) if watermark else datetime.now(timezone.utc) - timedelta(days=2)
+      except ValueError:
+          wm = datetime.now(timezone.utc) - timedelta(days=2)
+
+      docs, latest = [], wm
+      since_ts = int(wm.timestamp())
+      hn_min_points = {{ inputs.hn_min_points }}
+      reddit_limit = {{ inputs.reddit_limit }}
+
+      with httpx.Client(timeout=30.0, headers={"User-Agent": ua}) as client:
+          for kw in hn_keywords:
+              r = client.get(
+                  "https://hn.algolia.com/api/v1/search_by_date",
+                  params={
+                      "query": kw,
+                      "tags": "story",
+                      "numericFilters": f"created_at_i>{since_ts},points>{hn_min_points}",
+                      "hitsPerPage": 50,
+                  },
+              )
+              if r.status_code != 200:
+                  continue
+              for hit in r.json().get("hits", []):
+                  created = datetime.fromtimestamp(hit["created_at_i"], tz=timezone.utc)
+                  if created <= wm:
+                      continue
+                  url = hit.get("url") or f"https://news.ycombinator.com/item?id={hit['objectID']}"
+                  docs.append({
+                      "topic_id": "{{ inputs.topic_id }}",
+                      "source": "hn",
+                      "source_id": hit["objectID"],
+                      "url": url,
+                      "title": hit.get("title") or hit.get("story_title"),
+                      "author": hit.get("author"),
+                      "published_at": created.isoformat(),
+                      "raw_text": (hit.get("title") or "") + "\n" + (hit.get("story_text") or ""),
+                      "language": "en",
+                      "metadata": {"points": hit.get("points"), "num_comments": hit.get("num_comments"), "keyword": kw},
+                  })
+                  if created > latest:
+                      latest = created
+              time.sleep(1)
+
+          for sub in reddit_subs:
+              r = client.get(f"https://www.reddit.com/r/{sub}/new.json", params={"limit": reddit_limit})
+              if r.status_code != 200:
+                  continue
+              for child in r.json().get("data", {}).get("children", []):
+                  d = child.get("data", {})
+                  created = datetime.fromtimestamp(d["created_utc"], tz=timezone.utc)
+                  if created <= wm:
+                      continue
+                  docs.append({
+                      "topic_id": "{{ inputs.topic_id }}",
+                      "source": "reddit",
+                      "source_id": d["id"],
+                      "url": "https://www.reddit.com" + d["permalink"],
+                      "title": d.get("title"),
+                      "author": d.get("author"),
+                      "published_at": created.isoformat(),
+                      "raw_text": (d.get("title") or "") + "\n\n" + (d.get("selftext") or ""),
+                      "language": "en",
+                      "metadata": {"score": d.get("score"), "num_comments": d.get("num_comments"), "subreddit": sub, "url": d.get("url_overridden_by_dest")},
+                  })
+                  if created > latest:
+                      latest = created
+              time.sleep(2)
+
+      seen, unique = set(), []
+      for d in docs:
+          k = (d["source"], d["source_id"])
+          if k in seen:
+              continue
+          seen.add(k)
+          unique.append(d)
+
+      json.dump(unique, open("documents.json", "w"), ensure_ascii=False)
+      open("watermark.txt", "w").write(latest.isoformat())
+      print(f"prepared {len(unique)} hn+reddit documents")
+    retry:
+      type: constant
+      maxAttempts: 3
+      interval: PT5S
+
+  - id: insert_documents
+    type: io.kestra.plugin.jdbc.postgresql.Queries
+    sqlType: PREPARED
+    sql: |
+      INSERT INTO lh.documents (topic_id, source, source_id, url, title, author, published_at, raw_text, language, metadata)
+      SELECT
+        d->>'topic_id', d->>'source', d->>'source_id',
+        d->>'url', d->>'title', d->>'author',
+        NULLIF(d->>'published_at','')::timestamptz,
+        d->>'raw_text', d->>'language',
+        COALESCE(d->'metadata', '{}'::jsonb)
+      FROM jsonb_array_elements('{{ read(outputs.fetch_social.outputFiles['documents.json']) }}'::jsonb) AS d
+      ON CONFLICT (topic_id, source, source_id) DO NOTHING
+      RETURNING id;
+    fetchType: STORE
+
+  - id: persist_watermark
+    type: io.kestra.plugin.core.kv.Set
+    key: "topic:{{ inputs.topic_id }}:watermark:hn_reddit"
+    value: "{{ read(outputs.fetch_social.outputFiles['watermark.txt']) }}"
+
+  - id: emit_done
+    type: io.kestra.plugin.core.log.Log
+    message: "hn_reddit ingest topic={{ inputs.topic_id }} inserted_rows={{ outputs.insert_documents.size ?? 0 }}"
+
+triggers:
+  - id: schedule
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "*/30 * * * *"
+    inputs:
+      topic_id: agentic-eng
+
+errors:
+  - id: log_failure
+    type: io.kestra.plugin.core.log.Log
+    level: ERROR
+    message: "hn_reddit ingest failed topic={{ inputs.topic_id }}: {{ errorLogs() }}"

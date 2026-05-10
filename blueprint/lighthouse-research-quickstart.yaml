@@ -1,0 +1,25 @@
+id: research_quickstart
+namespace: company.team.blueprint
+description: |
+  Slim blueprint — HTTP fetch + LiteLLM_CLASSIFICATION via OpenAI-compatible proxy.
+  Propose upstream to `kestra-io/blueprints` after tailoring secrets.
+
+inputs:
+  - id: prompt
+    type: STRING
+    defaults: Classify Kestra as product, research, or other.
+
+tasks:
+  - id: classify
+    type: io.kestra.plugin.ai.completion.Classification
+    allowFailure: true
+    provider:
+      type: io.kestra.plugin.ai.provider.OpenAI
+      apiKey: "{{ secret('LITELLM_API_KEY') }}"
+      baseUrl: "{{ secret('LITELLM_BASE_URL') }}"
+      modelName: "{{ secret('LITELLM_MODEL_PRIMARY') }}"
+    classes:
+      - product
+      - research
+      - other
+    prompt: "{{ inputs.prompt }}"

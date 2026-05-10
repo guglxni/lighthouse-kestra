@@ -1,0 +1,167 @@
+id: github_trending
+namespace: company.team.lighthouse.ingest
+description: |
+  Search GitHub for repos matching the topic profile's `github_queries` and
+  ingest as documents. Uses GitHub's REST search API (1k results / hr cap;
+  authenticated tokens get 30 req/min on /search).
+
+labels:
+  topic: "{{ inputs.topic_id }}"
+  source: github
+  layer: ingest
+
+inputs:
+  - id: topic_id
+    type: STRING
+    defaults: agentic-eng
+  - id: per_page
+    type: INT
+    defaults: 30
+
+concurrency:
+  limit: 10
+  behavior: QUEUE
+
+taskDefaults:
+  - type: io.kestra.plugin.jdbc.postgresql.Queries
+    values:
+      url: "jdbc:postgresql://{{ secret('POSTGRES_HOST') }}:{{ secret('POSTGRES_PORT') }}/{{ secret('POSTGRES_DB') }}"
+      username: "{{ secret('POSTGRES_USER') }}"
+      password: "{{ secret('POSTGRES_PASSWORD') }}"
+
+tasks:
+  - id: load_profile
+    type: io.kestra.plugin.core.namespace.DownloadFiles
+    namespace: "{{ flow.namespace }}"
+    files:
+      - "topics/{{ inputs.topic_id }}.yaml"
+
+  - id: read_watermark
+    type: io.kestra.plugin.core.kv.Get
+    key: "topic:{{ inputs.topic_id }}:watermark:github"
+    errorOnMissing: false
+
+  - id: fetch_repos
+    type: io.kestra.plugin.scripts.python.Script
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      image: lighthouse/worker:latest
+    inputFiles:
+      profile.yaml: "{{ read('topics/' ~ inputs.topic_id ~ '.yaml') }}"
+    outputFiles:
+      - documents.json
+      - watermark.txt
+    env:
+      GITHUB_TOKEN: "{{ secret('GITHUB_TOKEN') }}"
+      WATERMARK: "{{ outputs.read_watermark.value ?? '' }}"
+    script: |
+      import json, yaml, os, time
+      from datetime import datetime, timezone, timedelta
+      import httpx
+
+      profile = yaml.safe_load(open("profile.yaml"))
+      queries = (profile.get("sources", {}) or {}).get("github_queries", []) or []
+      token = os.environ.get("GITHUB_TOKEN")
+      headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
+      if token:
+          headers["Authorization"] = f"Bearer {token}"
+
+      watermark = os.environ.get("WATERMARK", "")
+      try:
+          wm = datetime.fromisoformat(watermark.replace("Z", "+00:00")) if watermark else datetime.now(timezone.utc) - timedelta(days=7)
+      except ValueError:
+          wm = datetime.now(timezone.utc) - timedelta(days=7)
+
+      docs, latest = [], wm
+      with httpx.Client(timeout=30.0) as client:
+          for q in queries:
+              r = client.get(
+                  "https://api.github.com/search/repositories",
+                  params={"q": q, "sort": "updated", "order": "desc", "per_page": {{ inputs.per_page }}},
+                  headers=headers,
+              )
+              if r.status_code == 403 and "rate limit" in r.text.lower():
+                  time.sleep(30)
+                  continue
+              r.raise_for_status()
+              for repo in r.json().get("items", []):
+                  pushed = datetime.fromisoformat(repo["pushed_at"].replace("Z", "+00:00"))
+                  if pushed <= wm:
+                      continue
+                  docs.append({
+                      "topic_id": "{{ inputs.topic_id }}",
+                      "source": "github",
+                      "source_id": repo["full_name"],
+                      "url": repo["html_url"],
+                      "title": repo["full_name"],
+                      "author": (repo.get("owner") or {}).get("login"),
+                      "published_at": repo["pushed_at"],
+                      "raw_text": (repo.get("description") or "") + "\n\n" + " ".join(repo.get("topics", [])),
+                      "language": repo.get("language"),
+                      "metadata": {
+                          "stars": repo.get("stargazers_count"),
+                          "forks": repo.get("forks_count"),
+                          "open_issues": repo.get("open_issues_count"),
+                          "topics": repo.get("topics", []),
+                          "query": q,
+                      },
+                  })
+                  if pushed > latest:
+                      latest = pushed
+              time.sleep(2)
+
+      seen, unique = set(), []
+      for d in docs:
+          if d["source_id"] in seen:
+              continue
+          seen.add(d["source_id"])
+          unique.append(d)
+
+      json.dump(unique, open("documents.json", "w"), ensure_ascii=False)
+      open("watermark.txt", "w").write(latest.isoformat())
+      print(f"prepared {len(unique)} github repos across {len(queries)} queries")
+    retry:
+      type: constant
+      maxAttempts: 3
+      interval: PT5S
+
+  - id: insert_documents
+    type: io.kestra.plugin.jdbc.postgresql.Queries
+    sqlType: PREPARED
+    sql: |
+      INSERT INTO lh.documents (topic_id, source, source_id, url, title, author, published_at, raw_text, language, metadata)
+      SELECT
+        d->>'topic_id', d->>'source', d->>'source_id',
+        d->>'url', d->>'title', d->>'author',
+        NULLIF(d->>'published_at','')::timestamptz,
+        d->>'raw_text', d->>'language',
+        COALESCE(d->'metadata', '{}'::jsonb)
+      FROM jsonb_array_elements('{{ read(outputs.fetch_repos.outputFiles['documents.json']) }}'::jsonb) AS d
+      ON CONFLICT (topic_id, source, source_id) DO UPDATE
+        SET published_at = EXCLUDED.published_at,
+            metadata = EXCLUDED.metadata,
+            fetched_at = now()
+      RETURNING id;
+    fetchType: STORE
+
+  - id: persist_watermark
+    type: io.kestra.plugin.core.kv.Set
+    key: "topic:{{ inputs.topic_id }}:watermark:github"
+    value: "{{ read(outputs.fetch_repos.outputFiles['watermark.txt']) }}"
+
+  - id: emit_done
+    type: io.kestra.plugin.core.log.Log
+    message: "github trending topic={{ inputs.topic_id }} inserted_rows={{ outputs.insert_documents.size ?? 0 }}"
+
+triggers:
+  - id: schedule
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "0 */4 * * *"
+    inputs:
+      topic_id: agentic-eng
+
+errors:
+  - id: log_failure
+    type: io.kestra.plugin.core.log.Log
+    level: ERROR
+    message: "github trending failed topic={{ inputs.topic_id }}: {{ errorLogs() }}"

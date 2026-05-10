@@ -1,0 +1,149 @@
+id: cluster_summarize
+namespace: company.team.lighthouse.process
+description: |
+  Build a narrative Markdown brief from classified documents using LiteLLM
+  (OpenAI-compatible `/v1/chat/completions`). Mirrors the `ChatCompletion`
+  + `OpenAI` provider pattern (`baseUrl` + `apiKey`) validated via Kestra MCP
+  `task_schema`; implemented in Python here so long Markdown persists safely.
+
+labels:
+  layer: process
+
+inputs:
+  - id: topic_id
+    type: STRING
+    defaults: agentic-eng
+  - id: use_multi_llm
+    type: BOOLEAN
+    defaults: false
+
+tasks:
+  - id: summarize_and_persist
+    type: io.kestra.plugin.scripts.python.Script
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      image: lighthouse/worker:latest
+    env:
+      PGHOST: "{{ secret('POSTGRES_HOST') }}"
+      PGPORT: "{{ secret('POSTGRES_PORT') }}"
+      PGDATABASE: "{{ secret('POSTGRES_DB') }}"
+      PGUSER: "{{ secret('POSTGRES_USER') }}"
+      PGPASSWORD: "{{ secret('POSTGRES_PASSWORD') }}"
+      LITELLM_BASE_URL: "{{ secret('LITELLM_BASE_URL') }}"
+      LITELLM_API_KEY: "{{ secret('LITELLM_API_KEY') }}"
+      MODEL_PRIMARY: "{{ secret('LITELLM_MODEL_PRIMARY') }}"
+      MODEL_FALLBACK: "{{ secret('LITELLM_MODEL_FALLBACK') }}"
+      TOPIC_ID: "{{ inputs.topic_id }}"
+      USE_MULTI: "{{ inputs.use_multi_llm }}"
+    script: |
+      import os
+      import httpx
+      import psycopg
+
+      topic = os.environ["TOPIC_ID"]
+      use_multi = os.environ["USE_MULTI"].lower() in ("true", "1", "yes")
+      base = os.environ["LITELLM_BASE_URL"].rstrip("/")
+      key = os.environ["LITELLM_API_KEY"]
+      primary = os.environ["MODEL_PRIMARY"]
+      fallback = os.environ["MODEL_FALLBACK"]
+
+      conn = psycopg.connect(
+          host=os.environ["PGHOST"],
+          port=os.environ["PGPORT"],
+          dbname=os.environ["PGDATABASE"],
+          user=os.environ["PGUSER"],
+          password=os.environ["PGPASSWORD"],
+      )
+      sql = """
+      SELECT d.title, d.url, c.relevance, c.category
+      FROM lh.classifications c
+      JOIN lh.documents d ON d.id = c.document_id
+      WHERE c.topic_id = %s
+      ORDER BY c.relevance DESC NULLS LAST, d.published_at DESC NULLS LAST
+      LIMIT 40;
+      """
+      lines = []
+      with conn.cursor() as cur:
+          cur.execute(sql, (topic,))
+          for title, url, rel, cat in cur.fetchall():
+              lines.append(f"- ({rel}) [{cat}] {title} — {url}")
+      conn.close()
+
+      digest = "\n".join(lines) or "(no classified documents yet)"
+      system = (
+          "You are Lighthouse. Given bullet research items, produce a concise daily "
+          "briefing in Markdown with sections: ## Themes, ## Notable links, ## Open questions."
+      )
+
+      def chat(model: str) -> str:
+          payload = {
+              "model": model,
+              "messages": [
+                  {"role": "system", "content": system},
+                  {"role": "user", "content": digest},
+              ],
+              "temperature": 0.35,
+          }
+          headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+          with httpx.Client(timeout=180.0) as client:
+              r = client.post(f"{base}/chat/completions", json=payload, headers=headers)
+              r.raise_for_status()
+              return r.json()["choices"][0]["message"]["content"]
+
+      try:
+          md = chat(primary)
+      except Exception as exc:
+        print(f"primary summarize failed: {exc}")
+        if not use_multi:
+          raise
+        md = chat(fallback)
+
+      conn = psycopg.connect(
+          host=os.environ["PGHOST"],
+          port=os.environ["PGPORT"],
+          dbname=os.environ["PGDATABASE"],
+          user=os.environ["PGUSER"],
+          password=os.environ["PGPASSWORD"],
+      )
+      with conn.cursor() as cur:
+          cur.execute(
+              """
+              INSERT INTO lh.briefs (topic_id, date, markdown, clusters)
+              VALUES (%s, now()::date, %s, %s::jsonb)
+              ON CONFLICT (topic_id, date) DO UPDATE
+                SET markdown = EXCLUDED.markdown
+              """,
+              (topic, md, "[]"),
+          )
+      conn.commit()
+      conn.close()
+      print("brief upsert ok")
+
+  - id: reference_chatcompletion
+    type: io.kestra.plugin.ai.completion.ChatCompletion
+    description: |
+      Declarative reference — same provider wiring as scripts (LiteLLM):
+      `type: io.kestra.plugin.ai.provider.OpenAI` + `baseUrl` + `modelName`.
+    runIf: "false"
+    allowFailure: true
+    provider:
+      type: io.kestra.plugin.ai.provider.OpenAI
+      apiKey: "{{ secret('LITELLM_API_KEY') }}"
+      baseUrl: "{{ secret('LITELLM_BASE_URL') }}"
+      modelName: "{{ secret('LITELLM_MODEL_PRIMARY') }}"
+    messages:
+      - type: USER
+        content: "Reference only."
+
+triggers:
+  - id: schedule
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "30 7 * * *"
+    inputs:
+      topic_id: agentic-eng
+
+errors:
+  - id: log_failure
+    type: io.kestra.plugin.core.log.Log
+    level: ERROR
+    message: "cluster_summarize failed: {{ errorLogs() }}"

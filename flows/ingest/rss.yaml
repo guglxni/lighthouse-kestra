@@ -1,0 +1,163 @@
+id: rss
+namespace: company.team.lighthouse.ingest
+description: |
+  Pull new entries from Miniflux for the active topic profile, persist into
+  `lh.documents`, and let the Flow trigger on `process.embed_dedup` pick them up.
+
+  Realtime path: Miniflux webhook → `webhook` trigger fires immediately on
+  feed updates. Scheduled path: every 15 minutes as a fallback.
+
+labels:
+  topic: "{{ inputs.topic_id }}"
+  source: rss
+  layer: ingest
+
+inputs:
+  - id: topic_id
+    type: STRING
+    defaults: agentic-eng
+  - id: limit
+    type: INT
+    defaults: 100
+
+variables:
+  miniflux_url: "{{ secret('MINIFLUX_URL') }}"
+  miniflux_token: "{{ secret('MINIFLUX_TOKEN') }}"
+
+concurrency:
+  limit: 10
+  behavior: QUEUE
+
+taskDefaults:
+  - type: io.kestra.plugin.core.http.Request
+    values:
+      timeout: PT60S
+  - type: io.kestra.plugin.jdbc.postgresql.Query
+    values:
+      url: "jdbc:postgresql://{{ secret('POSTGRES_HOST') }}:{{ secret('POSTGRES_PORT') }}/{{ secret('POSTGRES_DB') }}"
+      username: "{{ secret('POSTGRES_USER') }}"
+      password: "{{ secret('POSTGRES_PASSWORD') }}"
+
+tasks:
+  - id: load_profile
+    type: io.kestra.plugin.core.namespace.DownloadFiles
+    namespace: "{{ flow.namespace }}"
+    files:
+      - "topics/{{ inputs.topic_id }}.yaml"
+
+  - id: parse_profile
+    type: io.kestra.plugin.serdes.yaml.YamlToIon
+    from: "{{ outputs.load_profile.files['topics/' ~ inputs.topic_id ~ '.yaml'] }}"
+
+  - id: read_watermark
+    type: io.kestra.plugin.core.kv.Get
+    key: "topic:{{ inputs.topic_id }}:watermark:rss"
+    errorOnMissing: false
+
+  - id: fetch_entries
+    type: io.kestra.plugin.core.http.Request
+    uri: "{{ vars.miniflux_url }}/v1/entries?status=unread&limit={{ inputs.limit }}&order=published_at&direction=desc&published_after={{ outputs.read_watermark.value ?? '1970-01-01T00:00:00Z' }}"
+    method: GET
+    headers:
+      X-Auth-Token: "{{ vars.miniflux_token }}"
+    contentType: application/json
+    retry:
+      type: constant
+      maxAttempts: 5
+      interval: PT2S
+
+  - id: parse_entries
+    type: io.kestra.plugin.scripts.python.Script
+    description: Map Miniflux entries to our `lh.documents` shape, applying topic-profile RSS allowlist.
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      image: lighthouse/worker:latest
+    inputFiles:
+      profile.yaml: "{{ read('topics/' ~ inputs.topic_id ~ '.yaml') }}"
+      entries.json: "{{ outputs.fetch_entries.body }}"
+    outputFiles:
+      - documents.json
+      - watermark.txt
+    script: |
+      import json, yaml, sys, hashlib
+      from datetime import datetime, timezone
+
+      profile = yaml.safe_load(open("profile.yaml"))
+      allow = set((profile.get("sources", {}) or {}).get("rss", []) or [])
+      payload = json.loads(open("entries.json").read())
+      entries = payload.get("entries", []) if isinstance(payload, dict) else []
+
+      docs = []
+      latest = None
+      for e in entries:
+          feed_url = (e.get("feed") or {}).get("feed_url") or ""
+          if allow and feed_url not in allow:
+              continue
+          source_id = str(e.get("id") or hashlib.sha1((e.get("url") or "").encode()).hexdigest())
+          published = e.get("published_at") or e.get("created_at")
+          docs.append({
+              "topic_id": "{{ inputs.topic_id }}",
+              "source": "rss",
+              "source_id": source_id,
+              "url": e.get("url"),
+              "title": e.get("title"),
+              "author": e.get("author"),
+              "published_at": published,
+              "raw_text": e.get("content") or "",
+              "language": (e.get("feed") or {}).get("language"),
+              "metadata": {"feed_url": feed_url, "starred": e.get("starred", False)},
+          })
+          if published and (latest is None or published > latest):
+              latest = published
+
+      if latest is None:
+          latest = datetime.now(timezone.utc).isoformat()
+
+      json.dump(docs, open("documents.json", "w"), ensure_ascii=False)
+      open("watermark.txt", "w").write(latest)
+      print(f"prepared {len(docs)} rss documents")
+
+  - id: insert_documents
+    type: io.kestra.plugin.jdbc.postgresql.Queries
+    sqlType: PREPARED
+    sql: |
+      INSERT INTO lh.documents (topic_id, source, source_id, url, title, author, published_at, raw_text, language, metadata)
+      SELECT
+        d->>'topic_id', d->>'source', d->>'source_id',
+        d->>'url', d->>'title', d->>'author',
+        NULLIF(d->>'published_at','')::timestamptz,
+        d->>'raw_text', d->>'language',
+        COALESCE(d->'metadata', '{}'::jsonb)
+      FROM jsonb_array_elements('{{ read(outputs.parse_entries.outputFiles['documents.json']) }}'::jsonb) AS d
+      ON CONFLICT (topic_id, source, source_id) DO NOTHING
+      RETURNING id, source_id;
+    fetchType: STORE
+
+  - id: persist_watermark
+    type: io.kestra.plugin.core.kv.Set
+    key: "topic:{{ inputs.topic_id }}:watermark:rss"
+    value: "{{ read(outputs.parse_entries.outputFiles['watermark.txt']) }}"
+
+  - id: emit_done
+    type: io.kestra.plugin.core.log.Log
+    message: "rss ingest topic={{ inputs.topic_id }} inserted_rows={{ outputs.insert_documents.size ?? 0 }}"
+
+triggers:
+  - id: schedule
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "*/15 * * * *"
+    inputs:
+      topic_id: agentic-eng
+
+  - id: miniflux_webhook
+    type: io.kestra.plugin.core.trigger.Webhook
+    key: miniflux-rss
+    description: |
+      Miniflux pushes new-entry events to /api/v1/executions/webhook/<flow>/miniflux-rss.
+      Configure Miniflux's WEBHOOK_URL env to that path.
+
+errors:
+  - id: log_failure
+    type: io.kestra.plugin.core.log.Log
+    level: ERROR
+    message: "rss ingest failed for topic={{ inputs.topic_id }}: {{ errorLogs() }}"

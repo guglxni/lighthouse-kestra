@@ -1,0 +1,47 @@
+id: test_classify_schema
+namespace: company.team.lighthouse.tests
+type: io.kestra.core.tests.Flow
+description: |
+  Unit test for `lighthouse.process.classify`. Mocks the LLM tasks so we
+  control the chain: tier 1 (Gemini) returns null/FAILED → tier 2 (Claude)
+  returns "highly-relevant" → tier 3 (OpenAI) is skipped. Assert that the
+  persisted classification carries `model = claude-haiku-4` and a relevance
+  in [0, 1].
+
+flowId: classify
+flowNamespace: company.team.lighthouse.process
+
+fixtures:
+  inputs:
+    topic_id: agentic-eng
+    batch_size: 1
+  taskMocks:
+    - taskId: select_unclassified
+      response:
+        rows:
+          - {id: "11111111-1111-1111-1111-111111111111", title: "Test doc", url: "https://x.test", raw_text: "stub text"}
+        size: 1
+    - taskId: classify_gemini
+      response:
+        classification: null
+        executionStatus: FAILED
+    - taskId: classify_claude
+      response:
+        classification: "highly-relevant"
+        executionStatus: SUCCESS
+    - taskId: classify_openai
+      skipped: true
+
+assertions:
+  - description: classify_openai was skipped because tier 2 returned a label
+    expression: "{{ outputs.classify_openai.skipped ?? true }}"
+    equals: true
+  - description: pick_winner chose claude
+    expression: "{{ (read(outputs.pick_winner.outputFiles['row.json']) | json).model }}"
+    equals: "claude-haiku-4"
+  - description: relevance is between 0 and 1
+    expression: "{{ (read(outputs.pick_winner.outputFiles['row.json']) | json).relevance }}"
+    between: [0, 1]
+  - description: category is one of the four allowed labels
+    expression: "{{ (read(outputs.pick_winner.outputFiles['row.json']) | json).category }}"
+    in: [highly-relevant, relevant, tangential, irrelevant]

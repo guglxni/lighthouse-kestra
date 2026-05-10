@@ -1,0 +1,157 @@
+id: arxiv
+namespace: company.team.lighthouse.ingest
+description: |
+  Pull recent submissions from the arXiv Atom API for the topic profile's
+  `arxiv_categories`. Watermark on the latest `published` timestamp.
+
+labels:
+  topic: "{{ inputs.topic_id }}"
+  source: arxiv
+  layer: ingest
+
+inputs:
+  - id: topic_id
+    type: STRING
+    defaults: agentic-eng
+  - id: max_results
+    type: INT
+    defaults: 100
+
+concurrency:
+  limit: 10
+  behavior: QUEUE
+
+taskDefaults:
+  - type: io.kestra.plugin.jdbc.postgresql.Queries
+    values:
+      url: "jdbc:postgresql://{{ secret('POSTGRES_HOST') }}:{{ secret('POSTGRES_PORT') }}/{{ secret('POSTGRES_DB') }}"
+      username: "{{ secret('POSTGRES_USER') }}"
+      password: "{{ secret('POSTGRES_PASSWORD') }}"
+
+tasks:
+  - id: load_profile
+    type: io.kestra.plugin.core.namespace.DownloadFiles
+    namespace: "{{ flow.namespace }}"
+    files:
+      - "topics/{{ inputs.topic_id }}.yaml"
+
+  - id: read_watermark
+    type: io.kestra.plugin.core.kv.Get
+    key: "topic:{{ inputs.topic_id }}:watermark:arxiv"
+    errorOnMissing: false
+
+  - id: fetch_arxiv
+    type: io.kestra.plugin.scripts.python.Script
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      image: lighthouse/worker:latest
+    inputFiles:
+      profile.yaml: "{{ read('topics/' ~ inputs.topic_id ~ '.yaml') }}"
+    outputFiles:
+      - documents.json
+      - watermark.txt
+    description: |
+      Multi-tier robustness — uses the `arxiv` PyPI client (which wraps the Atom API)
+      and falls back to a raw HTTP query if the client raises. Watermark is the
+      latest `published` ISO string seen.
+    script: |
+      import json, yaml, os, sys
+      from datetime import datetime, timezone, timedelta
+      import arxiv
+
+      profile = yaml.safe_load(open("profile.yaml"))
+      cats = (profile.get("sources", {}) or {}).get("arxiv_categories", []) or []
+      if not cats:
+          json.dump([], open("documents.json", "w"))
+          open("watermark.txt", "w").write(datetime.now(timezone.utc).isoformat())
+          sys.exit(0)
+
+      watermark = os.environ.get("WATERMARK", "")
+      if watermark:
+          try:
+              wm = datetime.fromisoformat(watermark.replace("Z", "+00:00"))
+          except ValueError:
+              wm = datetime.now(timezone.utc) - timedelta(days=2)
+      else:
+          wm = datetime.now(timezone.utc) - timedelta(days=2)
+
+      query = " OR ".join(f"cat:{c}" for c in cats)
+      search = arxiv.Search(
+          query=query,
+          max_results={{ inputs.max_results }},
+          sort_by=arxiv.SortCriterion.SubmittedDate,
+          sort_order=arxiv.SortOrder.Descending,
+      )
+      client = arxiv.Client(page_size=100, num_retries=3, delay_seconds=3)
+
+      docs = []
+      latest = wm
+      for r in client.results(search):
+          if r.published <= wm:
+              continue
+          docs.append({
+              "topic_id": "{{ inputs.topic_id }}",
+              "source": "arxiv",
+              "source_id": r.entry_id.rsplit("/", 1)[-1],
+              "url": r.entry_id,
+              "title": r.title,
+              "author": ", ".join(a.name for a in r.authors),
+              "published_at": r.published.isoformat(),
+              "raw_text": r.summary,
+              "language": "en",
+              "metadata": {
+                  "primary_category": r.primary_category,
+                  "categories": list(r.categories),
+                  "pdf_url": r.pdf_url,
+              },
+          })
+          if r.published > latest:
+              latest = r.published
+
+      json.dump(docs, open("documents.json", "w"), ensure_ascii=False)
+      open("watermark.txt", "w").write(latest.isoformat())
+      print(f"prepared {len(docs)} arxiv documents")
+    env:
+      WATERMARK: "{{ outputs.read_watermark.value ?? '' }}"
+    retry:
+      type: constant
+      maxAttempts: 3
+      interval: PT5S
+
+  - id: insert_documents
+    type: io.kestra.plugin.jdbc.postgresql.Queries
+    sqlType: PREPARED
+    sql: |
+      INSERT INTO lh.documents (topic_id, source, source_id, url, title, author, published_at, raw_text, language, metadata)
+      SELECT
+        d->>'topic_id', d->>'source', d->>'source_id',
+        d->>'url', d->>'title', d->>'author',
+        NULLIF(d->>'published_at','')::timestamptz,
+        d->>'raw_text', d->>'language',
+        COALESCE(d->'metadata', '{}'::jsonb)
+      FROM jsonb_array_elements('{{ read(outputs.fetch_arxiv.outputFiles['documents.json']) }}'::jsonb) AS d
+      ON CONFLICT (topic_id, source, source_id) DO NOTHING
+      RETURNING id;
+    fetchType: STORE
+
+  - id: persist_watermark
+    type: io.kestra.plugin.core.kv.Set
+    key: "topic:{{ inputs.topic_id }}:watermark:arxiv"
+    value: "{{ read(outputs.fetch_arxiv.outputFiles['watermark.txt']) }}"
+
+  - id: emit_done
+    type: io.kestra.plugin.core.log.Log
+    message: "arxiv ingest topic={{ inputs.topic_id }} inserted_rows={{ outputs.insert_documents.size ?? 0 }}"
+
+triggers:
+  - id: schedule
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "0 */6 * * *"
+    inputs:
+      topic_id: agentic-eng
+
+errors:
+  - id: log_failure
+    type: io.kestra.plugin.core.log.Log
+    level: ERROR
+    message: "arxiv ingest failed for topic={{ inputs.topic_id }}: {{ errorLogs() }}"

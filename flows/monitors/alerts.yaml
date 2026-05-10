@@ -1,0 +1,62 @@
+id: alerts
+namespace: company.team.lighthouse.monitors
+description: |
+  Single-pager alert path for the entire `lighthouse.*` namespace. Listens for
+  FAILED or WARNING executions across all sub-namespaces and posts a compact
+  Slack message with execution link + flow path + first error line.
+
+  Pattern source: Kestra's May 7 2026 production AI workflows blog —
+  https://kestra.io/blogs/ai-workflows-in-production — single alert flow as a
+  Flow trigger so we don't sprinkle Slack-fail-handler tasks across every flow.
+
+labels:
+  layer: monitors
+
+inputs:
+  - id: failed_flow
+    type: STRING
+  - id: failed_namespace
+    type: STRING
+  - id: failed_execution_id
+    type: STRING
+  - id: failed_state
+    type: STRING
+
+tasks:
+  - id: pager
+    type: io.kestra.plugin.notifications.slack.SlackIncomingWebhook
+    url: "https://slack.com/api/chat.postMessage"
+    payload: |
+      {
+        "channel": "#lighthouse-alerts",
+        "text": ":rotating_light: *Lighthouse {{ inputs.failed_state }}* — `{{ inputs.failed_namespace }}.{{ inputs.failed_flow }}`",
+        "blocks": [
+          {"type":"header","text":{"type":"plain_text","text":"Lighthouse {{ inputs.failed_state }}"}},
+          {"type":"section","fields":[
+            {"type":"mrkdwn","text":"*Flow*\n`{{ inputs.failed_namespace }}.{{ inputs.failed_flow }}`"},
+            {"type":"mrkdwn","text":"*Execution*\n<{{ kestra.url ?? 'http://localhost:8080' }}/ui/executions/{{ inputs.failed_namespace }}/{{ inputs.failed_flow }}/{{ inputs.failed_execution_id }}|open>"}
+          ]}
+        ]
+      }
+    retry:
+      type: constant
+      maxAttempts: 5
+      interval: PT2S
+
+triggers:
+  - id: on_lighthouse_failure
+    type: io.kestra.plugin.core.trigger.Flow
+    description: |
+      Triggers on FAILED|WARNING for any execution under
+      `company.team.lighthouse.*` (prefix match).
+    conditions:
+      - type: io.kestra.plugin.core.condition.ExecutionNamespaceCondition
+        namespace: company.team.lighthouse
+        prefix: true
+      - type: io.kestra.plugin.core.condition.ExecutionStatusCondition
+        in: [FAILED, WARNING]
+    inputs:
+      failed_flow: "{{ trigger.flowId }}"
+      failed_namespace: "{{ trigger.namespace }}"
+      failed_execution_id: "{{ trigger.executionId }}"
+      failed_state: "{{ trigger.state }}"

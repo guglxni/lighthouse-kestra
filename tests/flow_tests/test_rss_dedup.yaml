@@ -1,0 +1,51 @@
+id: test_rss_dedup
+namespace: company.team.lighthouse.tests
+type: io.kestra.core.tests.Flow
+description: |
+  Unit test for `lighthouse.ingest.rss`. Mocks the Miniflux fetch with a stub
+  HTTP response containing two items where the second is a known duplicate
+  (same source_id), and asserts that exactly one row was inserted into
+  `lh.documents`.
+
+  Test syntax follows https://kestra.io/blogs/unit-tests-for-flows.
+
+flowId: rss
+flowNamespace: company.team.lighthouse.ingest
+
+fixtures:
+  inputs:
+    topic_id: agentic-eng
+    limit: 10
+  taskMocks:
+    - taskId: fetch_entries
+      response:
+        body: |
+          {
+            "total": 2,
+            "entries": [
+              {"id": 1, "title": "Anthropic Claude 5", "url": "https://anthropic.com/news/claude5",
+               "published_at": "2026-05-09T10:00:00Z", "feed": {"feed_url": "https://www.anthropic.com/news/rss.xml", "language": "en"},
+               "content": "<p>Claude 5 ships</p>", "author": "Anthropic"},
+              {"id": 1, "title": "Anthropic Claude 5 (duplicate)", "url": "https://anthropic.com/news/claude5",
+               "published_at": "2026-05-09T10:00:00Z", "feed": {"feed_url": "https://www.anthropic.com/news/rss.xml", "language": "en"},
+               "content": "<p>same item again</p>", "author": "Anthropic"}
+            ]
+          }
+        statusCode: 200
+    - taskId: insert_documents
+      response:
+        rows:
+          - {id: "00000000-0000-0000-0000-000000000001", source_id: "1"}
+        size: 1
+
+assertions:
+  - description: only one document was inserted (dedup worked at the unique constraint)
+    expression: "{{ outputs.insert_documents.size }}"
+    equals: 1
+  - description: watermark was persisted with the latest published_at
+    expression: "{{ read(outputs.parse_entries.outputFiles['watermark.txt']) }}"
+    equals: "2026-05-09T10:00:00Z"
+  - description: the parse step emitted exactly one document
+    expression: |
+      {{ (read(outputs.parse_entries.outputFiles['documents.json']) | json | length) }}
+    equals: 1

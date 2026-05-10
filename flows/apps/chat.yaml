@@ -1,0 +1,18 @@
+id: chat
+namespace: company.team.lighthouse.apps
+description: thin wrapper — delegates to `serve.chat_brief` pattern (webhook).
+
+inputs:
+  - id: topic_id
+    type: STRING
+    defaults: agentic-eng
+
+tasks:
+  - id: redirect_note
+    type: io.kestra.plugin.core.log.Log
+    message: "Bind Apps UI inputs to `company.team.lighthouse.serve.chat_brief`."
+
+triggers:
+  - id: webhook
+    type: io.kestra.plugin.core.trigger.Webhook
+    key: app-chat

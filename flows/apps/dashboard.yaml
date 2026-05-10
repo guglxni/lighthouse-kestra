@@ -1,0 +1,31 @@
+id: dashboard
+namespace: company.team.lighthouse.apps
+description: |
+  App-backend flow: returns the latest brief Markdown for a topic (bind in Kestra Apps UI).
+
+inputs:
+  - id: topic_id
+    type: STRING
+    defaults: agentic-eng
+
+tasks:
+  - id: latest
+    type: io.kestra.plugin.jdbc.postgresql.Query
+    url: "jdbc:postgresql://{{ secret('POSTGRES_HOST') }}:{{ secret('POSTGRES_PORT') }}/{{ secret('POSTGRES_DB') }}"
+    username: "{{ secret('POSTGRES_USER') }}"
+    password: "{{ secret('POSTGRES_PASSWORD') }}"
+    sql: |
+      SELECT markdown FROM lh.briefs
+      WHERE topic_id = '{{ inputs.topic_id }}'
+      ORDER BY date DESC
+      LIMIT 1;
+    fetchType: FETCH_ONE
+
+  - id: show
+    type: io.kestra.plugin.core.log.Log
+    message: "Latest brief fetched for topic={{ inputs.topic_id }} (see Outputs on `latest`)."
+
+triggers:
+  - id: webhook
+    type: io.kestra.plugin.core.trigger.Webhook
+    key: app-dashboard

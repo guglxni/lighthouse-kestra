@@ -1,0 +1,114 @@
+id: chat_brief
+namespace: company.team.lighthouse.serve
+description: |
+  Minimal "chat the brief" — pulls high-relevance docs, calls LiteLLM chat,
+  stores transcript rows in `lh.chat_history`.
+
+labels:
+  layer: serve
+
+inputs:
+  - id: topic_id
+    type: STRING
+    defaults: agentic-eng
+  - id: question
+    type: STRING
+    defaults: What changed today?
+  - id: session_id
+    type: STRING
+    defaults: default-session
+
+tasks:
+  - id: answer
+    type: io.kestra.plugin.scripts.python.Script
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      image: lighthouse/worker:latest
+    env:
+      PGHOST: "{{ secret('POSTGRES_HOST') }}"
+      PGPORT: "{{ secret('POSTGRES_PORT') }}"
+      PGDATABASE: "{{ secret('POSTGRES_DB') }}"
+      PGUSER: "{{ secret('POSTGRES_USER') }}"
+      PGPASSWORD: "{{ secret('POSTGRES_PASSWORD') }}"
+      LITELLM_BASE_URL: "{{ secret('LITELLM_BASE_URL') }}"
+      LITELLM_API_KEY: "{{ secret('LITELLM_API_KEY') }}"
+      MODEL: "{{ secret('LITELLM_MODEL_PRIMARY') }}"
+      TOPIC_ID: "{{ inputs.topic_id }}"
+      QUESTION: "{{ inputs.question }}"
+      SESSION: "{{ inputs.session_id }}"
+    script: |
+      import os
+      import httpx
+      import psycopg
+
+      topic = os.environ["TOPIC_ID"]
+      question = os.environ["QUESTION"]
+      session = os.environ["SESSION"]
+      base = os.environ["LITELLM_BASE_URL"].rstrip("/")
+      key = os.environ["LITELLM_API_KEY"]
+      model = os.environ["MODEL"]
+
+      conn = psycopg.connect(
+          host=os.environ["PGHOST"],
+          port=os.environ["PGPORT"],
+          dbname=os.environ["PGDATABASE"],
+          user=os.environ["PGUSER"],
+          password=os.environ["PGPASSWORD"],
+      )
+      sql = """
+      SELECT left(COALESCE(d.raw_text,''), 4000)
+      FROM lh.classifications c
+      JOIN lh.documents d ON d.id = c.document_id
+      WHERE c.topic_id = %s
+      ORDER BY c.relevance DESC NULLS LAST
+      LIMIT 5;
+      """
+      ctx_parts = []
+      with conn.cursor() as cur:
+          cur.execute(sql, (topic,))
+          for (chunk,) in cur.fetchall():
+            ctx_parts.append(chunk)
+      conn.close()
+
+      context = "\n\n".join(ctx_parts)[:20000]
+      messages = [
+        {"role": "system", "content": "Answer using the context; cite titles inline when possible."},
+        {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {question}"},
+      ]
+      payload = {"model": model, "messages": messages, "temperature": 0.3}
+      headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+      with httpx.Client(timeout=120.0) as client:
+          r = client.post(f"{base}/chat/completions", json=payload, headers=headers)
+          r.raise_for_status()
+          answer = r.json()["choices"][0]["message"]["content"]
+
+      conn = psycopg.connect(
+          host=os.environ["PGHOST"],
+          port=os.environ["PGPORT"],
+          dbname=os.environ["PGDATABASE"],
+          user=os.environ["PGUSER"],
+          password=os.environ["PGPASSWORD"],
+      )
+      with conn.cursor() as cur:
+          cur.execute(
+              "INSERT INTO lh.chat_history (session_id, topic_id, role, content) VALUES (%s,%s,%s,%s)",
+              (session, topic, "user", question),
+          )
+          cur.execute(
+              "INSERT INTO lh.chat_history (session_id, topic_id, role, content) VALUES (%s,%s,%s,%s)",
+              (session, topic, "assistant", answer),
+          )
+      conn.commit()
+      conn.close()
+      print(answer)
+
+triggers:
+  - id: webhook
+    type: io.kestra.plugin.core.trigger.Webhook
+    key: chat-brief
+
+errors:
+  - id: log_failure
+    type: io.kestra.plugin.core.log.Log
+    level: ERROR
+    message: "chat_brief failed: {{ errorLogs() }}"

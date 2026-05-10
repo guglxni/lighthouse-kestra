@@ -1,0 +1,61 @@
+id: deepdive
+namespace: company.team.lighthouse.serve
+type: io.kestra.plugin.ee.apps.App
+description: |
+  On-demand deep-dive App. Form fires `serve.deepdive`, which runs
+  GPT-Researcher in Docker; the resulting markdown is rendered below.
+
+labels:
+  layer: app
+
+blocks:
+  - id: header
+    type: io.kestra.plugin.ee.apps.blocks.Markdown
+    content: |
+      # Deep-dive
+      A long-running, citation-heavy research report on any query you give it.
+      Backed by GPT-Researcher in Docker; expect 2–5 minutes.
+
+  - id: form
+    type: io.kestra.plugin.ee.apps.blocks.Form
+    title: Research request
+    submitLabel: Run deep-dive
+    onSubmit:
+      type: io.kestra.plugin.core.flow.Subflow
+      namespace: company.team.lighthouse.serve
+      flowId: deepdive
+      wait: true
+      inputs:
+        topic_id: "{{ block('form').topic_id }}"
+        query: "{{ block('form').query }}"
+        report_type: "{{ block('form').report_type }}"
+    inputs:
+      - id: topic_id
+        type: SELECT
+        values:
+          - agentic-eng
+          - solana-zk
+          - indie-saas
+          - data-eng-ai
+        defaults: agentic-eng
+      - id: query
+        type: STRING
+      - id: report_type
+        type: SELECT
+        values:
+          - research_report
+          - resource_report
+          - outline_report
+          - detailed_report
+        defaults: research_report
+
+  - id: report
+    type: io.kestra.plugin.ee.apps.blocks.Markdown
+    content: |
+      ## Report
+      {{ block('form').lastExecution.outputs.report_markdown ?? '_No report yet._' }}
+
+      ### Sources
+      {% for src in (block('form').lastExecution.outputs.report_sources ?? []) %}
+      - {{ src }}
+      {% endfor %}

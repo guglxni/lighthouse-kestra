@@ -1,0 +1,210 @@
+id: audio_video
+namespace: company.team.lighthouse.ingest
+description: |
+  Pull recent items from each topic profile's `youtube_channels` (YouTube channel
+  RSS feeds give us metadata for free), pre-filter by title relevance, then
+  transcribe a capped batch with faster-whisper inside the worker container.
+
+labels:
+  topic: "{{ inputs.topic_id }}"
+  source: audio_video
+  layer: ingest
+
+inputs:
+  - id: topic_id
+    type: STRING
+    defaults: agentic-eng
+  - id: max_transcribe
+    type: INT
+    defaults: 5
+
+concurrency:
+  limit: 5
+  behavior: QUEUE
+
+taskDefaults:
+  - type: io.kestra.plugin.jdbc.postgresql.Queries
+    values:
+      url: "jdbc:postgresql://{{ secret('POSTGRES_HOST') }}:{{ secret('POSTGRES_PORT') }}/{{ secret('POSTGRES_DB') }}"
+      username: "{{ secret('POSTGRES_USER') }}"
+      password: "{{ secret('POSTGRES_PASSWORD') }}"
+
+tasks:
+  - id: load_profile
+    type: io.kestra.plugin.core.namespace.DownloadFiles
+    namespace: "{{ flow.namespace }}"
+    files:
+      - "topics/{{ inputs.topic_id }}.yaml"
+
+  - id: read_watermark
+    type: io.kestra.plugin.core.kv.Get
+    key: "topic:{{ inputs.topic_id }}:watermark:audio_video"
+    errorOnMissing: false
+
+  - id: discover_videos
+    type: io.kestra.plugin.scripts.python.Script
+    description: |
+      Resolve channel handles to channel IDs via YouTube's redirect, then read
+      the public channel RSS (https://www.youtube.com/feeds/videos.xml?channel_id=...).
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      image: lighthouse/worker:latest
+    inputFiles:
+      profile.yaml: "{{ read('topics/' ~ inputs.topic_id ~ '.yaml') }}"
+    outputFiles:
+      - candidates.json
+    env:
+      WATERMARK: "{{ outputs.read_watermark.value ?? '' }}"
+    script: |
+      import json, yaml, os, re, time
+      from datetime import datetime, timezone, timedelta
+      import httpx
+      import feedparser
+
+      profile = yaml.safe_load(open("profile.yaml"))
+      channels = (profile.get("sources", {}) or {}).get("youtube_channels", []) or []
+      keywords = []
+      classify = (profile.get("prompts", {}) or {}).get("classify", "")
+      for token in re.findall(r"[A-Za-z][A-Za-z0-9\-]+", classify.lower()):
+          if 4 <= len(token) <= 24:
+              keywords.append(token)
+      keywords = list(dict.fromkeys(keywords))[:20]
+
+      watermark = os.environ.get("WATERMARK", "")
+      try:
+          wm = datetime.fromisoformat(watermark.replace("Z", "+00:00")) if watermark else datetime.now(timezone.utc) - timedelta(days=3)
+      except ValueError:
+          wm = datetime.now(timezone.utc) - timedelta(days=3)
+
+      candidates = []
+      with httpx.Client(timeout=30.0, follow_redirects=True) as client:
+          for handle in channels:
+              h = handle.lstrip("@")
+              channel_id = None
+              try:
+                  r = client.get(f"https://www.youtube.com/@{h}")
+                  m = re.search(r'"channelId":"(UC[\w-]{20,})"', r.text or "")
+                  if m:
+                      channel_id = m.group(1)
+              except Exception as exc:
+                  print(f"channel resolve failed for @{h}: {exc}")
+                  continue
+              if not channel_id:
+                  continue
+              feed = feedparser.parse(f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}")
+              for entry in feed.entries[:25]:
+                  published = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc) if getattr(entry, "published_parsed", None) else None
+                  if not published or published <= wm:
+                      continue
+                  candidates.append({
+                      "topic_id": "{{ inputs.topic_id }}",
+                      "source": "youtube",
+                      "source_id": entry.yt_videoid if hasattr(entry, "yt_videoid") else entry.id.rsplit(":", 1)[-1],
+                      "url": entry.link,
+                      "title": entry.title,
+                      "author": handle,
+                      "published_at": published.isoformat(),
+                  })
+              time.sleep(2)
+
+      candidates.sort(key=lambda c: any(k in (c["title"] or "").lower() for k in keywords), reverse=True)
+      json.dump(candidates, open("candidates.json", "w"), ensure_ascii=False)
+      print(f"discovered {len(candidates)} candidate videos")
+
+  - id: transcribe
+    type: io.kestra.plugin.scripts.python.Script
+    description: faster-whisper transcription, capped to inputs.max_transcribe.
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      image: lighthouse/worker:latest
+      cpu:
+        cpus: 4
+    inputFiles:
+      candidates.json: "{{ outputs.discover_videos.outputFiles['candidates.json'] }}"
+    outputFiles:
+      - documents.json
+      - watermark.txt
+    env:
+      WHISPER_THREADS: "4"
+    beforeCommands:
+      - "echo 'transcribing up to {{ inputs.max_transcribe }} videos'"
+    script: |
+      import json, subprocess, sys
+      payload = json.load(open("candidates.json"))[:{{ inputs.max_transcribe }}]
+      if not payload:
+          json.dump([], open("documents.json", "w"))
+          open("watermark.txt", "w").write("1970-01-01T00:00:00+00:00")
+          sys.exit(0)
+
+      result = subprocess.run(
+          ["python", "/app/scripts/transcribe.py", "--max-items", str({{ inputs.max_transcribe }})],
+          input=json.dumps(payload),
+          capture_output=True,
+          text=True,
+          timeout=3600,
+      )
+      if result.returncode != 0:
+          sys.stderr.write(result.stderr)
+          raise SystemExit(result.returncode)
+
+      transcribed = json.loads(result.stdout or "[]")
+      docs = []
+      latest = "1970-01-01T00:00:00+00:00"
+      for item in transcribed:
+          docs.append({
+              "topic_id": item["topic_id"],
+              "source": item.get("source", "youtube"),
+              "source_id": item["source_id"],
+              "url": item["url"],
+              "title": item.get("title"),
+              "author": item.get("author"),
+              "published_at": item.get("published_at"),
+              "raw_text": item.get("text", ""),
+              "language": item.get("language"),
+              "metadata": {"duration_s": item.get("duration_s"), "transcribed": True},
+          })
+          if (item.get("published_at") or "") > latest:
+              latest = item["published_at"]
+
+      json.dump(docs, open("documents.json", "w"), ensure_ascii=False)
+      open("watermark.txt", "w").write(latest)
+      print(f"transcribed {len(docs)} items")
+    timeout: PT2H
+
+  - id: insert_documents
+    type: io.kestra.plugin.jdbc.postgresql.Queries
+    sqlType: PREPARED
+    sql: |
+      INSERT INTO lh.documents (topic_id, source, source_id, url, title, author, published_at, raw_text, language, metadata)
+      SELECT
+        d->>'topic_id', d->>'source', d->>'source_id',
+        d->>'url', d->>'title', d->>'author',
+        NULLIF(d->>'published_at','')::timestamptz,
+        d->>'raw_text', d->>'language',
+        COALESCE(d->'metadata', '{}'::jsonb)
+      FROM jsonb_array_elements('{{ read(outputs.transcribe.outputFiles['documents.json']) }}'::jsonb) AS d
+      ON CONFLICT (topic_id, source, source_id) DO NOTHING
+      RETURNING id;
+    fetchType: STORE
+
+  - id: persist_watermark
+    type: io.kestra.plugin.core.kv.Set
+    key: "topic:{{ inputs.topic_id }}:watermark:audio_video"
+    value: "{{ read(outputs.transcribe.outputFiles['watermark.txt']) }}"
+
+  - id: emit_done
+    type: io.kestra.plugin.core.log.Log
+    message: "audio_video ingest topic={{ inputs.topic_id }} inserted_rows={{ outputs.insert_documents.size ?? 0 }}"
+
+triggers:
+  - id: schedule
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "0 */12 * * *"
+    inputs:
+      topic_id: agentic-eng
+
+errors:
+  - id: log_failure
+    type: io.kestra.plugin.core.log.Log
+    level: ERROR
+    message: "audio_video ingest failed topic={{ inputs.topic_id }}: {{ errorLogs() }}"

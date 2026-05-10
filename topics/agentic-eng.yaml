@@ -1,0 +1,74 @@
+id: agentic-eng
+name: Agentic Engineering
+description: |
+  AI coding agents, orchestration frameworks, MCP, evals, and the practical
+  engineering stack around production LLM applications.
+sources:
+  rss:
+    - https://www.anthropic.com/news/rss.xml
+    - https://openai.com/blog/rss.xml
+    - https://deepmind.google/blog/rss.xml
+    - https://huggingface.co/blog/feed.xml
+    - https://blog.langchain.dev/rss/
+    - https://www.latent.space/feed
+    - https://simonwillison.net/atom/everything/
+    - https://lilianweng.github.io/index.xml
+    - https://eugeneyan.com/index.xml
+    - https://www.philschmid.de/rss
+    - https://buttondown.com/ainews/rss
+    - https://thezvi.substack.com/feed
+  arxiv_categories:
+    - cs.AI
+    - cs.CL
+    - cs.SE
+    - cs.LG
+  github_queries:
+    - "topic:agent stars:>500 pushed:>now-7d"
+    - "topic:llm-agent stars:>200 pushed:>now-7d"
+    - "topic:mcp stars:>100 pushed:>now-14d"
+    - "topic:ai-coding stars:>500 pushed:>now-14d"
+  hn_keywords:
+    - agent
+    - claude
+    - cursor
+    - mcp
+    - "ai coding"
+    - llm
+    - eval
+  reddit_subs:
+    - LocalLLaMA
+    - MachineLearning
+    - LangChain
+    - singularity
+  youtube_channels:
+    - "@LatentSpaceTV"
+    - "@AnthropicAI"
+    - "@AIEngineerWorldsFair"
+    - "@cognition-labs"
+  web_extra:
+    - https://www.anthropic.com/research
+    - https://platform.openai.com/docs/changelog
+schedule: "0 8 * * *"
+delivery:
+  notion_page_id: "{{ secret('NOTION_PAGE_AGENTIC') }}"
+  slack_channel: "#agentic-eng-brief"
+  discord_webhook: "{{ secret('DISCORD_AGENTIC') }}"
+  email_to: "agentic@example.com"
+prompts:
+  classify: |
+    You are scoring research items for an "Agentic Engineering" research brief.
+    Score 0.0–1.0 for relevance to: AI coding agents (Cursor, Claude Code,
+    Copilot, Aider, Cline), agent orchestration frameworks (LangGraph,
+    CrewAI, AutoGen, OpenAI Agents SDK), MCP / tool-use protocols, evals
+    and observability for LLM apps, RAG production patterns, prompt-engineering
+    research, and the production engineering stack around LLMs (vector DBs,
+    inference, routing). De-prioritise: pure vision/diffusion, robotics,
+    tutorials about ChatGPT prompts.
+    Return: {relevance, category, tags, rationale}.
+  summarize: |
+    Summarise this item for a senior engineer building production AI workflows.
+    Focus on: novel technique, concrete numbers/benchmarks, breaking changes,
+    practical implications. 3–5 bullets. No hype, no marketing language.
+ranking:
+  top_n_clusters: 5
+  min_relevance: 0.6

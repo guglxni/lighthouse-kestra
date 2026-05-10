@@ -1,0 +1,8 @@
+id: unit_brief_shape
+namespace: company.team.lighthouse.tests
+description: Validates brief formatting rules — placeholder.
+
+tasks:
+  - id: ok
+    type: io.kestra.plugin.core.log.Log
+    message: "Assert `lh.briefs.markdown` contains '## Themes' in integration env."

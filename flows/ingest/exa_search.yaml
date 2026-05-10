@@ -1,0 +1,43 @@
+id: exa_search
+namespace: company.team.lighthouse.ingest
+description: |
+  Optional semantic search enrichment via Exa (`EXA_API_KEY`). Uses
+  `allowFailure: true` when the key is absent or the API errors.
+
+labels:
+  layer: ingest
+  source: exa
+
+inputs:
+  - id: topic_id
+    type: STRING
+    defaults: agentic-eng
+  - id: query
+    type: STRING
+    defaults: agentic engineering orchestration
+
+tasks:
+  - id: search
+    type: io.kestra.plugin.core.http.Request
+    uri: https://api.exa.ai/search
+    method: POST
+    contentType: application/json
+    headers:
+      Authorization: Bearer {{ secret('EXA_API_KEY') }}
+    body: |
+      {"query": "{{ inputs.query }}", "numResults": 5}
+    allowFailure: true
+    retry:
+      type: constant
+      maxAttempts: 3
+      interval: PT2S
+
+  - id: log_hits
+    type: io.kestra.plugin.core.log.Log
+    message: "exa_search topic={{ inputs.topic_id }} code={{ outputs.search.code ?? 'skipped' }}"
+
+errors:
+  - id: log_failure
+    type: io.kestra.plugin.core.log.Log
+    level: ERROR
+    message: "exa_search failed: {{ errorLogs() }}"

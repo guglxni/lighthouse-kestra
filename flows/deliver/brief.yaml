@@ -1,0 +1,98 @@
+id: brief
+namespace: company.team.lighthouse.deliver
+description: |
+  Load today's `lh.briefs` row and fan out to Discord (per-topic webhook)
+  and optional Slack incoming webhook URL.
+
+labels:
+  layer: deliver
+
+inputs:
+  - id: topic_id
+    type: STRING
+    defaults: agentic-eng
+
+tasks:
+  - id: deliver
+    type: io.kestra.plugin.scripts.python.Script
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      image: lighthouse/worker:latest
+    env:
+      PGHOST: "{{ secret('POSTGRES_HOST') }}"
+      PGPORT: "{{ secret('POSTGRES_PORT') }}"
+      PGDATABASE: "{{ secret('POSTGRES_DB') }}"
+      PGUSER: "{{ secret('POSTGRES_USER') }}"
+      PGPASSWORD: "{{ secret('POSTGRES_PASSWORD') }}"
+      TOPIC_ID: "{{ inputs.topic_id }}"
+      DISCORD_AGENTIC: "{{ secret('DISCORD_WEBHOOK_AGENTIC') }}"
+      DISCORD_SOLANA: "{{ secret('DISCORD_WEBHOOK_SOLANA') }}"
+      DISCORD_INDIE: "{{ secret('DISCORD_WEBHOOK_INDIE') }}"
+      DISCORD_DATAENG: "{{ secret('DISCORD_WEBHOOK_DATAENG') }}"
+      SLACK_WEBHOOK_URL: "{{ secret('SLACK_WEBHOOK_URL') }}"
+    script: |
+      import os
+      import json
+      import httpx
+      import psycopg
+
+      topic = os.environ["TOPIC_ID"]
+      hooks = {
+        "agentic-eng": os.environ.get("DISCORD_AGENTIC") or "",
+        "solana-zk": os.environ.get("DISCORD_SOLANA") or "",
+        "indie-saas": os.environ.get("DISCORD_INDIE") or "",
+        "data-eng-ai": os.environ.get("DISCORD_DATAENG") or "",
+      }
+      discord_url = hooks.get(topic, "")
+
+      conn = psycopg.connect(
+          host=os.environ["PGHOST"],
+          port=os.environ["PGPORT"],
+          dbname=os.environ["PGDATABASE"],
+          user=os.environ["PGUSER"],
+          password=os.environ["PGPASSWORD"],
+      )
+      with conn.cursor() as cur:
+          cur.execute(
+              "SELECT markdown FROM lh.briefs WHERE topic_id = %s AND date = now()::date ORDER BY created_at DESC LIMIT 1",
+              (topic,),
+          )
+          row = cur.fetchone()
+      conn.close()
+
+      if not row:
+          print("no brief for today; skipping delivery")
+          raise SystemExit(0)
+
+      md = row[0]
+      text = md if len(md) < 1900 else md[:1900] + "…"
+
+      targets = []
+      if discord_url:
+          targets.append(("discord", discord_url))
+      slack = os.environ.get("SLACK_WEBHOOK_URL") or ""
+      if slack:
+          targets.append(("slack", slack))
+
+      for kind, url in targets:
+          if kind == "discord":
+              payload = {"content": text}
+          else:
+              payload = {"text": text}
+          with httpx.Client(timeout=30.0) as client:
+              r = client.post(url, json=payload)
+              if r.status_code >= 400:
+                  print(f"delivery failed {r.status_code}: {r.text}")
+
+triggers:
+  - id: morning
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "0 8 * * *"
+    inputs:
+      topic_id: agentic-eng
+
+errors:
+  - id: log_failure
+    type: io.kestra.plugin.core.log.Log
+    level: ERROR
+    message: "deliver.brief failed: {{ errorLogs() }}"

@@ -1,0 +1,189 @@
+id: embed_dedup
+namespace: company.team.lighthouse.process
+description: |
+  Embed new documents into `lh.embeddings` via the LiteLLM OpenAI-compatible
+  `/v1/embeddings` endpoint (text-embedding-3-small). Triggered on a schedule
+  and after successful ingest flows.
+
+labels:
+  layer: process
+
+inputs:
+  - id: topic_id
+    type: STRING
+    defaults: agentic-eng
+  - id: batch_size
+    type: INT
+    defaults: 32
+
+
+tasks:
+  - id: embed_batch
+    type: io.kestra.plugin.scripts.python.Script
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      image: lighthouse/worker:latest
+    env:
+      PGHOST: "{{ secret('POSTGRES_HOST') }}"
+      PGPORT: "{{ secret('POSTGRES_PORT') }}"
+      PGDATABASE: "{{ secret('POSTGRES_DB') }}"
+      PGUSER: "{{ secret('POSTGRES_USER') }}"
+      PGPASSWORD: "{{ secret('POSTGRES_PASSWORD') }}"
+      LITELLM_BASE_URL: "{{ secret('LITELLM_BASE_URL') }}"
+      LITELLM_API_KEY: "{{ secret('LITELLM_API_KEY') }}"
+      EMBEDDING_MODEL: "text-embedding-3-small"
+      TOPIC_ID: "{{ inputs.topic_id }}"
+      BATCH_SIZE: "{{ inputs.batch_size }}"
+    script: |
+      import json, os
+      import httpx
+      import psycopg
+
+      base = os.environ["LITELLM_BASE_URL"].rstrip("/")
+      key = os.environ["LITELLM_API_KEY"]
+      model = os.environ["EMBEDDING_MODEL"]
+      topic = os.environ["TOPIC_ID"]
+      batch_size = int(os.environ["BATCH_SIZE"])
+
+      conn = psycopg.connect(
+          host=os.environ["PGHOST"],
+          port=os.environ["PGPORT"],
+          dbname=os.environ["PGDATABASE"],
+          user=os.environ["PGUSER"],
+          password=os.environ["PGPASSWORD"],
+      )
+
+      sql = """
+      SELECT d.id, COALESCE(d.raw_text, '') AS t
+      FROM lh.documents d
+      LEFT JOIN lh.embeddings e ON e.document_id = d.id
+      WHERE d.topic_id = %s AND e.document_id IS NULL AND length(COALESCE(d.raw_text,'')) > 32
+      ORDER BY d.fetched_at DESC
+      LIMIT %s;
+      """
+      rows = []
+      with conn.cursor() as cur:
+          cur.execute(sql, (topic, batch_size))
+          rows = cur.fetchall()
+
+      if not rows:
+          print("no documents to embed")
+          conn.close()
+          raise SystemExit(0)
+
+      texts = [r[1][:8000] for r in rows]
+      ids = [str(r[0]) for r in rows]
+
+      payload = {"model": model, "input": texts}
+      headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+      with httpx.Client(timeout=120.0) as client:
+          r = client.post(f"{base}/embeddings", json=payload, headers=headers)
+          r.raise_for_status()
+          data = r.json()
+
+      embeds = [item["embedding"] for item in data["data"]]
+      if len(embeds) != len(ids):
+          raise RuntimeError("embedding count mismatch")
+
+      with conn.cursor() as cur:
+          for doc_id, vec in zip(ids, embeds):
+              cur.execute(
+                  "INSERT INTO lh.embeddings (document_id, embedding, model) VALUES (%s::uuid, %s, %s) ON CONFLICT (document_id) DO NOTHING",
+                  (doc_id, vec, model),
+              )
+      conn.commit()
+      conn.close()
+      print(f"embedded {len(ids)} documents for topic={topic}")
+    retry:
+      type: constant
+      maxAttempts: 3
+      interval: PT5S
+
+  - id: done
+    type: io.kestra.plugin.core.log.Log
+    message: "embed_dedup finished topic={{ inputs.topic_id }}"
+
+triggers:
+  - id: schedule
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "*/30 * * * *"
+    inputs:
+      topic_id: agentic-eng
+
+  - id: after_rss
+    type: io.kestra.plugin.core.trigger.Flow
+    conditions:
+      - type: io.kestra.plugin.core.condition.ExecutionFlow
+        namespace: company.team.lighthouse.ingest
+        flowId: rss
+      - type: io.kestra.plugin.core.condition.ExecutionStatus
+        in:
+          - SUCCESS
+    states:
+      - SUCCESS
+
+  - id: after_arxiv
+    type: io.kestra.plugin.core.trigger.Flow
+    conditions:
+      - type: io.kestra.plugin.core.condition.ExecutionFlow
+        namespace: company.team.lighthouse.ingest
+        flowId: arxiv
+      - type: io.kestra.plugin.core.condition.ExecutionStatus
+        in:
+          - SUCCESS
+    states:
+      - SUCCESS
+
+  - id: after_github
+    type: io.kestra.plugin.core.trigger.Flow
+    conditions:
+      - type: io.kestra.plugin.core.condition.ExecutionFlow
+        namespace: company.team.lighthouse.ingest
+        flowId: github_trending
+      - type: io.kestra.plugin.core.condition.ExecutionStatus
+        in:
+          - SUCCESS
+    states:
+      - SUCCESS
+
+  - id: after_hn
+    type: io.kestra.plugin.core.trigger.Flow
+    conditions:
+      - type: io.kestra.plugin.core.condition.ExecutionFlow
+        namespace: company.team.lighthouse.ingest
+        flowId: hn_reddit
+      - type: io.kestra.plugin.core.condition.ExecutionStatus
+        in:
+          - SUCCESS
+    states:
+      - SUCCESS
+
+  - id: after_av
+    type: io.kestra.plugin.core.trigger.Flow
+    conditions:
+      - type: io.kestra.plugin.core.condition.ExecutionFlow
+        namespace: company.team.lighthouse.ingest
+        flowId: audio_video
+      - type: io.kestra.plugin.core.condition.ExecutionStatus
+        in:
+          - SUCCESS
+    states:
+      - SUCCESS
+
+  - id: after_web
+    type: io.kestra.plugin.core.trigger.Flow
+    conditions:
+      - type: io.kestra.plugin.core.condition.ExecutionFlow
+        namespace: company.team.lighthouse.ingest
+        flowId: web_articles
+      - type: io.kestra.plugin.core.condition.ExecutionStatus
+        in:
+          - SUCCESS
+    states:
+      - SUCCESS
+
+errors:
+  - id: log_failure
+    type: io.kestra.plugin.core.log.Log
+    level: ERROR
+    message: "embed_dedup failed topic={{ inputs.topic_id }}: {{ errorLogs() }}"

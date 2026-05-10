@@ -1,0 +1,18 @@
+name: validate-flows
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  yaml:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tooling
+        run: pip install pyyaml yamllint
+      - name: Safe-load all YAML
+        run: python3 scripts/validate_yaml.py
+      - name: Yamllint
+        run: yamllint -d relaxed flows topics blueprint tests infra

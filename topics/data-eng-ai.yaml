@@ -1,0 +1,71 @@
+id: data-eng-ai
+name: Data Eng + AI
+description: |
+  Modern data stack — orchestration, lakehouse formats, query engines, and
+  the AI-native data layer (vector DBs, embedding pipelines, RAG infra).
+sources:
+  rss:
+    - https://kestra.io/blogs/rss.xml
+    - https://airflow.apache.org/blog/feed.xml
+    - https://www.dagster.io/blog/rss.xml
+    - https://www.prefect.io/blog/rss.xml
+    - https://duckdb.org/feed.xml
+    - https://www.databricks.com/blog/feed
+    - https://www.snowflake.com/blog/feed/
+    - https://www.getdbt.com/blog/rss.xml
+    - https://iceberg.apache.org/blog/feed.xml
+    - https://blog.cloudflare.com/rss/
+    - https://aws.amazon.com/blogs/big-data/feed/
+    - https://blog.singlestore.com/feed/
+    - https://www.confluent.io/blog/feed/
+  arxiv_categories:
+    - cs.DB
+    - cs.DC
+  github_queries:
+    - "topic:data-orchestration stars:>500 pushed:>now-7d"
+    - "topic:lakehouse stars:>500 pushed:>now-14d"
+    - "topic:vector-database stars:>500 pushed:>now-7d"
+    - "topic:rag stars:>200 pushed:>now-7d"
+  hn_keywords:
+    - duckdb
+    - iceberg
+    - dbt
+    - kestra
+    - dagster
+    - airflow
+    - "vector database"
+    - lakehouse
+  reddit_subs:
+    - dataengineering
+    - MachineLearning
+    - apachekafka
+  youtube_channels:
+    - "@DataEngineering"
+    - "@dbt-labs"
+    - "@duckdblabs"
+  web_extra:
+    - https://www.kestra.io/plugins
+    - https://github.com/duckdb/duckdb/releases.atom
+    - https://github.com/apache/iceberg/releases.atom
+schedule: "30 9 * * *"
+delivery:
+  notion_page_id: "{{ secret('NOTION_PAGE_DATAENG') }}"
+  slack_channel: "#data-eng-ai-brief"
+  discord_webhook: "{{ secret('DISCORD_DATAENG') }}"
+  email_to: "dataeng@example.com"
+prompts:
+  classify: |
+    You are scoring items for a "Data Eng + AI" research brief.
+    Relevant: orchestration (Kestra, Airflow, Dagster, Prefect), lakehouse
+    formats (Iceberg, Delta, Hudi), query engines (DuckDB, Trino, ClickHouse),
+    streaming (Kafka, Flink, RisingWave), modern ELT (dbt, SQLMesh), vector
+    DBs and RAG infrastructure, embedding pipelines, AI-native data tooling.
+    De-prioritise: pure ML model releases without infra implications, generic
+    cloud announcements.
+    Return: {relevance, category, tags, rationale}.
+  summarize: |
+    Summarise for a senior data/platform engineer. Lead with the operational
+    impact (perf number, cost change, breaking API). 3–5 bullets, no fluff.
+ranking:
+  top_n_clusters: 5
+  min_relevance: 0.6
