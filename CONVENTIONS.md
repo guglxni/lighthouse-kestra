@@ -86,6 +86,8 @@ container using `io.kestra.plugin.ai.provider.OpenAI` with:
 - `baseUrl`: `{{ secret('LITELLM_BASE_URL') }}` — e.g. `http://litellm:4000/v1` on Docker network.
 - `modelName`: `{{ secret('LITELLM_MODEL_PRIMARY') }}` or fallback / router alias.
 
+**Provider-agnostic routing:** Logical model names are defined in `infra/litellm/config.yaml` (any LiteLLM-supported backend). See [`docs/BYOK.md`](docs/BYOK.md).
+
 **Runtime modes**
 
 | Host env | Meaning |

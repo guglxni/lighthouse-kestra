@@ -17,12 +17,20 @@ delivers a daily brief to your channels. Everything is configured via a single
 YAML topic profile, so spinning up a brief for a new topic takes one file — no
 code changes.
 
+**LLM / BYOK:** Models are **not** locked to a single vendor. Kestra talks **OpenAI-compatible** HTTP to LiteLLM (or any gateway you point `LITELLM_BASE_URL` at). You define providers and aliases in [`infra/litellm/config.yaml`](infra/litellm/config.yaml). See [`docs/BYOK.md`](docs/BYOK.md) and optional **Exa** enrichment in [`flows/ingest/exa_search.yaml`](flows/ingest/exa_search.yaml).
+
 Four topic profiles ship preconfigured:
 
 - `agentic-eng` — Anthropic / OpenAI / Cursor / MCP / agent frameworks
 - `solana-zk` — Solana protocol + ZK proof systems + audits
 - `indie-saas` — Bootstrapped SaaS, distribution, growth case studies
 - `data-eng-ai` — Lakehouse, orchestration, vector DBs, RAG infra
+
+## WeMakeDevs × Kestra orchestration challenge
+
+If you are taking part in **[The Kestra Orchestration Challenge](https://www.wemakedevs.org/orchestration)** (May 4–17, 2026): register, complete **Kestra Fundamentals** on [Kestra Academy](https://academy.kestra.io), get certified, then post with **`#KestraAcademy`**. Lighthouse is a project you can showcase *after* certification — it is not a substitute for those steps.
+
+---
 
 ## Quickstart
 
