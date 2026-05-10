@@ -2,7 +2,7 @@
 
 > One engine. Four topic profiles. Daily research briefs to Notion, Slack, Discord, and email. Chat-the-brief and on-demand deep-dives via Kestra Apps. Drop a YAML topic file in, get a personalised brief tomorrow.
 
-[![Validate flows](https://github.com/aaryanguglani/lighthouse/actions/workflows/validate-flows.yml/badge.svg)](https://github.com/aaryanguglani/lighthouse/actions/workflows/validate-flows.yml)
+[![Validate flows](https://github.com/guglxni/lighthouse-kestra/actions/workflows/validate-flows.yml/badge.svg)](https://github.com/guglxni/lighthouse-kestra/actions/workflows/validate-flows.yml)
 
 ---
 
@@ -11,10 +11,11 @@
 Lighthouse is a research operating system built entirely on Kestra. It ingests
 RSS, arxiv, GitHub trending, HN/Reddit, transcribed YouTube/podcasts, and any
 arbitrary web URL; embeds and de-duplicates everything in pgvector; classifies
-and summarises with a multi-LLM fallback chain (Gemini 2.5 → Claude 4 → GPT-5);
-and delivers a daily brief to your channels. Everything is configured via a
-single YAML topic profile, so spinning up a brief for a new topic takes one
-file — no code changes.
+and summarises through **LiteLLM** (OpenAI-compatible `baseUrl`) with optional
+multi-model / Azure Kimi fallbacks (see [`CONVENTIONS.md`](CONVENTIONS.md)); and
+delivers a daily brief to your channels. Everything is configured via a single
+YAML topic profile, so spinning up a brief for a new topic takes one file — no
+code changes.
 
 Four topic profiles ship preconfigured:
 
@@ -26,9 +27,9 @@ Four topic profiles ship preconfigured:
 ## Quickstart
 
 ```bash
-git clone https://github.com/aaryanguglani/lighthouse.git
-cd lighthouse
-cp .env.example .env       # fill in OPENAI_API_KEY, GEMINI_API_KEY, …
+git clone https://github.com/guglxni/lighthouse-kestra.git
+cd lighthouse-kestra
+cp .env.example .env       # fill LiteLLM + provider keys (see table)
 docker compose -f infra/docker-compose.yml up -d
 open http://localhost:8080 # Kestra UI; Apps live under /ui/apps
 ```
@@ -37,9 +38,10 @@ Required secrets (set in `.env` or your secret manager):
 
 | Secret | Purpose |
 | --- | --- |
-| `OPENAI_API_KEY` | Embeddings + GPT-5 fallback |
-| `ANTHROPIC_API_KEY` | Claude Haiku/Sonnet fallback |
-| `GEMINI_API_KEY` | Gemini 2.5 Flash/Pro primary |
+| `LITELLM_BASE_URL`, `LITELLM_API_KEY`, `LITELLM_MODEL_PRIMARY` | Kestra → LiteLLM proxy (canonical path) |
+| `OPENAI_API_KEY` | Upstream for LiteLLM **and** optional direct scripts |
+| `AZURE_OPENAI_*`, `LITELLM_MODEL_FALLBACK` | Optional multi-tier / Azure Kimi fallback |
+| `ANTHROPIC_API_KEY`, `GEMINI_API_KEY` | Optional extra providers in LiteLLM config |
 | `NOTION_API_KEY`, `NOTION_PAGE_<TOPIC>` | Brief delivery |
 | `SLACK_BOT_TOKEN` | Slack delivery + monitors pager |
 | `DISCORD_WEBHOOK_<TOPIC>` | Discord delivery |
@@ -111,6 +113,38 @@ flowchart LR
 
 Deeper dive in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
+### Architecture graph (Graphify)
+
+[Lighthouse](https://github.com/guglxni/lighthouse-kestra) uses **[Graphify](https://github.com/safishamsi/graphify)** to turn the canonical docs plus a generated flow index into a **browsable knowledge graph** (`graph.json`, interactive HTML, `GRAPH_REPORT.md`). That helps contributors see how **namespaces**, **ingest → process → deliver** paths, **LiteLLM BYOK**, and **data/PG** concepts connect without re-reading every YAML file.
+
+**One command** (from repo root, with an LLM key set for markdown semantic extraction — default backend `openai`):
+
+```bash
+./scripts/graphify_lighthouse.sh
+# or
+make graphify
+```
+
+Outputs land in `docs/graphify/output/` (gitignored if large). The script copies `graph.html` → `report.html` for a stable name. Optional call-flow HTML: `GRAPHIFY_CALLFLOW=1 ./scripts/graphify_lighthouse.sh`.
+
+**Install (pick one)** — Graphify’s PyPI package is `graphifyy` (CLI remains `graphify`); use **0.7+** for `graphify extract`:
+
+```bash
+uv tool install graphifyy && graphify install
+# or: pipx install graphifyy && graphify install
+```
+
+If your globally installed `graphify` is older, the script falls back to **`uvx --from 'graphifyy>=0.7.13'`** when `uv` is available. Set `GRAPHIFY_BACKEND` (e.g. `gemini`, `claude`) and the matching API key per [Graphify’s README](https://github.com/safishamsi/graphify/blob/v7/README.md).
+
+**Submodule (optional):** vendor Graphify next to this repo for skills/hooks or local patches (use on **case-sensitive** filesystems; default macOS APFS is often case-**in**sensitive and upstream may appear permanently dirty):
+
+```bash
+git submodule add https://github.com/safishamsi/graphify graphify
+git submodule update --init --recursive
+```
+
+CI does not run Graphify by default (LLM keys); refresh graphs on release or when architecture docs change.
+
 ## Feature → Kestra capability mapping
 
 | Feature | Kestra capability | Where |
@@ -148,7 +182,7 @@ Deeper dive in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 | Clustering | [BERTopic](https://github.com/MaartenGr/BERTopic) | Weekly themes |
 | On-demand deep dive | [GPT-Researcher](https://github.com/assafelovic/gpt-researcher) | Apache 2.0, runs in Docker |
 | Web search for chat | [SearxNG](https://github.com/searxng/searxng) | Self-hosted meta-search |
-| File parsing edge cases | [markitdown](https://github.com/microsoft/markitdown) | Handles formats Tika struggles with |
+| Navigating 20+ YAML flows + docs | [Graphify](https://github.com/safishamsi/graphify) | Optional knowledge graph of ARCHITECTURE / CONVENTIONS / README + flow index (`./scripts/graphify_lighthouse.sh`) |
 
 ## Repo layout
 
@@ -170,7 +204,8 @@ lighthouse/
   infra/           docker-compose.yml Dockerfile.worker
   blueprint/       lighthouse-research-quickstart.yaml PR_BODY.md
   .github/workflows/validate-flows.yml
-  README.md ARCHITECTURE.md CONVENTIONS.md LOOM_SCRIPT.md SOCIAL_POST.md blogpost-draft.md LICENSE
+  README.md ARCHITECTURE.md CONVENTIONS.md docs/graphify/ scripts/graphify_lighthouse.sh
+  LOOM_SCRIPT.md SOCIAL_POST.md blogpost-draft.md docs/TODO.md LICENSE
 ```
 
 ## Screenshots

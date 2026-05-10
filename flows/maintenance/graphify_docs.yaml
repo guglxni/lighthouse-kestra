@@ -1,0 +1,24 @@
+id: graphify_docs
+namespace: company.team.lighthouse.maintenance
+description: |
+  Documentation reminder: architecture graphs are generated with Graphify on a
+  machine that has the repo, Python/uv (or pipx), and an LLM API key — not on a
+  typical Kestra worker. Use `./scripts/graphify_lighthouse.sh` from the repo root
+  and commit or share `docs/graphify/output/` as needed.
+
+labels:
+  layer: maintenance
+  docs: graphify
+
+tasks:
+  - id: how_to_refresh
+    type: io.kestra.plugin.core.log.Log
+    level: INFO
+    message: |
+      Refresh the Lighthouse knowledge graph locally:
+        ./scripts/graphify_lighthouse.sh
+      Or:
+        make graphify
+      Outputs: docs/graphify/output/ (graph.html, GRAPH_REPORT.md, graph.json).
+      Requires: graphifyy>=0.7 (see README → Architecture graph (Graphify)) and
+      OPENAI_API_KEY (or set GRAPHIFY_BACKEND / provider key per Graphify docs).

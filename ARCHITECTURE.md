@@ -36,10 +36,10 @@ sequenceDiagram
     Embed->>Embed: embed unembedded rows (OpenAI text-embedding-3-small)
     Embed->>Embed: cosine-near-dup check (sim ≥ 0.92) → mark metadata.duplicate_of
     Embed-->>Classify: SUCCESS
-    Classify->>Classify: per-doc multi-LLM chain (Gemini → Claude → GPT)
+    Classify->>Classify: per-doc via LiteLLM (primary / optional fallback models)
     Classify-->>Cluster: SUCCESS
     Cluster->>Cluster: BERTopic on relevant docs
-    Cluster->>Cluster: per-cluster synthesis (multi-LLM chain)
+    Cluster->>Cluster: per-cluster synthesis (LiteLLM chat)
     Cluster->>Cluster: UPSERT lh.briefs(topic_id, date)
     Note over Deliver: Schedule trigger at delivery time per topic
     Deliver->>Channels: Parallel block — all four channels with allowFailure
@@ -125,7 +125,8 @@ Each LLM step is a **chain of three tasks**:
 
 Why this beats a single LLM call:
 
-- Cheap by default. We pay Flash/Haiku/Mini prices for 90%+ of items.
+- **Cheap by default.** Tiered models live in LiteLLM config (`LITELLM_MODE` single vs multi);
+  Kestra always talks to one OpenAI-compatible base URL.
 - Robust to provider outages and per-account rate limits.
 - We **record which tier won** in the `model` column → easy cost / quality
   attribution later.
@@ -200,15 +201,11 @@ Three Apps live under `company.team.lighthouse.serve`:
 
 ## 11. Costs
 
-Order-of-magnitude per topic per day at ~200 ingested documents:
+- Classification (fast tier most items): order-of-magnitude **well under** prior Gemini-primary estimates when routed through a fast OpenAI-class model via LiteLLM.
+- Summarisation (quality tier, a few clusters per day): dominant cost is long-context chat completes.
+- Total illustrative **order-of-magnitude** per topic per day at ~200 ingested documents was previously estimated **well under \$0.10/topic/day** before deep-dives; re-benchmark with your live LiteLLM model names and usage.
 
-- Embeddings: 200 × ~600 tokens × $0.02/M = ~$0.0024
-- Classification (Gemini Flash 90%): 200 × ~800 tokens × $0.075/M = ~$0.012
-- Summarisation (Gemini Pro, 5 clusters): 5 × ~3k tokens × $1.25/M = ~$0.019
-- Total: well under $0.10/topic/day before deep-dives.
-
-Deep-dives are the variable cost — one report can hit $0.30–$2.00 depending
-on `report_type`. They're explicitly user-invoked.
+Deep-dives remain the highest variable cost — one GPT-Researcher report can land around **\$0.30–\$2.00** depending on depth. They are explicitly user-invoked.
 
 ## 12. Extension points
 
@@ -223,3 +220,16 @@ on `report_type`. They're explicitly user-invoked.
 - **Different embedding model**: change the model name in `embed_dedup` and
   the `vector(1536)` column type — the rest of the stack is dimension-agnostic
   beyond that one DDL change.
+
+## 13. Architecture graph ([Graphify](https://github.com/safishamsi/graphify))
+
+[Graphify](https://github.com/safishamsi/graphify) maps **Markdown + YAML-shaped text** into a **queryable knowledge graph** (interactive `graph.html`, `graph.json`, narrative `GRAPH_REPORT.md`). Lighthouse points it at:
+
+- [`ARCHITECTURE.md`](ARCHITECTURE.md), [`CONVENTIONS.md`](CONVENTIONS.md), [`README.md`](README.md) — canonical prose for **namespaces**, **LiteLLM BYOK** (`LITELLM_*` secrets, data path through Postgres/pgvector), and **feature → plugin** mapping.
+- A generated **`FLOWS_INDEX.md`** (flow file listing) — ties documentation to the **flows/** tree without concatenating every YAML body into one file.
+
+**Why here:** onboarding and review should not require a global `grep` of twenty flows. The graph surfaces **cross-cutting edges** (e.g. how `deliver.brief` depends on keys documented next to ingest) and gives **suggested questions** tuned to this repo’s terminology.
+
+**Command:** from repo root, `./scripts/graphify_lighthouse.sh` or `make graphify` (see README for PyPI package `graphifyy` ≥ 0.7 and LLM key requirements). Outputs: `docs/graphify/output/`. Kestra ships a non-executing reminder flow `maintenance.graphify_docs` for operators who live mostly in the UI.
+
+**Optional submodule:** `git submodule add https://github.com/safishamsi/graphify graphify` vendors upstream Graphify for skills/patches. Prefer **Linux or case-sensitive** checkouts — macOS default volumes can confuse Git with upstream Fortran fixture paths. The shell wrapper uses the **installed** `graphify` / `uvx` CLI, not the submodule path, unless you set `GRAPHIFY_BIN`.

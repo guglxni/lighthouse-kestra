@@ -6,7 +6,8 @@
 
 ## X / Twitter thread (8 tweets)
 
-> Replace `<LOOM_URL>`, `<REPO_URL>`, and `<BLOG_URL>` before posting.
+> Replace `<LOOM_URL>` and `<BLOG_URL>` before posting. **Repository:**
+> `https://github.com/guglxni/lighthouse-kestra`
 
 **1/8** — hook
 ```
@@ -33,7 +34,7 @@ Under the hood:
 
 → 6 ingest flows (RSS, arxiv, GitHub trending, HN+Reddit, YouTube/podcasts via Whisper, web articles)
 → pgvector embed + dedup
-→ multi-LLM fallback chain (Gemini → Claude → GPT)
+→ multi-LLM via LiteLLM (OpenAI-compatible proxy + optional fallbacks)
 → BERTopic clustering
 → Notion + Slack + Discord + SendGrid delivery
 → single-pager monitor flow across the whole namespace
@@ -82,7 +83,7 @@ Two takeaway artifacts:
 ```
 Source, docker-compose, blueprint, blog draft, and Loom — all in:
 
-<REPO_URL>
+https://github.com/guglxni/lighthouse-kestra
 
 Built with #KestraAcademy. h/t @kestra_io for the patterns and the MCP server (Claude wrote half the YAML by querying it).
 ```
@@ -91,7 +92,7 @@ Built with #KestraAcademy. h/t @kestra_io for the patterns and the MCP server (C
 
 ## LinkedIn post
 
-> Replace `<LOOM_URL>`, `<REPO_URL>`, `<BLOG_URL>` before posting. Optimal
+> Replace `<LOOM_URL>` and `<BLOG_URL>` before posting. Repository: https://github.com/guglxni/lighthouse-kestra. Optimal
 > length: ~1,200 chars; LinkedIn truncates after ~210 in the feed so make
 > the first two lines count.
 
@@ -104,7 +105,7 @@ One engine. Four topic profiles (Agentic Engineering, Solana/ZK, Indie SaaS, Dat
 
 What's interesting is the patterns underneath:
 
-🔁  A multi-LLM fallback chain (Gemini → Claude → GPT) for every classification and summarisation, lifted from Kestra's May 7 production-AI blog. Cheap by default, robust to outages, per-tier observability built in.
+🔁  A multi-LLM path through LiteLLM (fast vs quality models + optional Azure Kimi / other fallbacks), following the same runIf discipline as Kestra's May 7 production-AI blog.
 
 🔁  The same fallback shape applied outside AI: web-article extraction is Trafilatura → Jina Reader → headless Playwright, with the same runIf gating. The orchestrator doesn't care that the layers are HTTP libraries instead of chat APIs.
 
@@ -116,7 +117,7 @@ I packaged a slimmed quickstart blueprint, a 1,500-word blog post draft, a 2-min
 
 Loom: <LOOM_URL>
 Blog: <BLOG_URL>
-Source: <REPO_URL>
+Source: https://github.com/guglxni/lighthouse-kestra
 
 Built as my #KestraAcademy contest entry. Tagging @Kestra — would love feedback from the team.
 ```

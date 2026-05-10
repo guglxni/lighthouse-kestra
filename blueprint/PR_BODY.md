@@ -5,7 +5,7 @@
 Adds a single-file blueprint that pulls today's RSS + arxiv items for a
 single topic, embeds them in pgvector, classifies + summarises with Gemini,
 and posts a daily brief to Notion. It's the slimmed entrypoint to the full
-[Lighthouse research OS](https://github.com/aaryanguglani/lighthouse) — same
+[Lighthouse research OS](https://github.com/guglxni/lighthouse-kestra) — same
 patterns, fewer moving parts, runs on a stock Kestra + Postgres-pgvector
 docker-compose with three secrets (`OPENAI_API_KEY`, `GEMINI_API_KEY`,
 `NOTION_API_KEY`).
@@ -37,7 +37,7 @@ single-pager `monitors.alerts` flow listening across `lighthouse.*`.
 - It mirrors the shape of the existing `ai-notion-summary-perplexity`
   blueprint but adds **vector storage + dedup** (a request that came up
   multiple times in the community).
-- It's a clean upsell to the full [Lighthouse repo](https://github.com/aaryanguglani/lighthouse)
+- It's a clean upsell to the full [Lighthouse repo](https://github.com/guglxni/lighthouse-kestra)
   for users who want multi-source / multi-LLM / multi-channel.
 
 ## How to test

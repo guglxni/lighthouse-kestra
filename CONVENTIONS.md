@@ -11,7 +11,7 @@ Kestra requires a `company.team`-shape top-level namespace; we anchor everything
 - `company.team.lighthouse.deliver` — daily brief assembly + delivery
 - `company.team.lighthouse.serve` — chat-the-brief + on-demand deep-dive
 - `company.team.lighthouse.monitors` — single-pager alert flow
-- `company.team.lighthouse.maintenance` — gc / archive
+- `company.team.lighthouse.maintenance` — gc / archive + docs stubs (e.g. graphify refresh)
 
 Flow IDs are short and lowercase (e.g. `rss`, `arxiv`, `embed_dedup`, `brief`). The fully-qualified flow name is `<namespace>.<id>`, e.g. `company.team.lighthouse.ingest.rss`.
 
