@@ -26,3 +26,8 @@ htmlcov/
 .cache/
 docs/graphify/.staging/
 docs/graphify/output/
+
+# Maintainer-only / challenge prep — keep local, not in public clone
+LOOM_SCRIPT.md
+SOCIAL_POST.md
+blogpost-draft.md

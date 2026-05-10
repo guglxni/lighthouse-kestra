@@ -1,6 +1,7 @@
 # Tracked follow-ups
 
 - **`flows/` grep** (2026-05): no `TODO` / `FIXME` markers in flow YAML.
-- **Screenshots** in [`README.md`](../README.md) still use placeholders until Loom capture (see [`SOCIAL_POST.md`](../SOCIAL_POST.md)).
+- **Screenshots** in [`README.md`](../README.md): add under `docs/img/` when ready.
 - **Blueprint PR** to `kestra-io/blueprints`: submit using [`blueprint/PR_BODY.md`](../blueprint/PR_BODY.md).
-- **Security audit (2026-05):** `alerts` flow corrected to use Slack **Incoming Webhook** URL (not `chat.postMessage`); LiteLLM image pinned; `brief` delivery enforces HTTPS webhooks; [`SECURITY.md`](../SECURITY.md) and Dependabot added. Remaining: record Loom, enable Kestra auth / reverse proxy for non-local deploys.
+- **Security audit (2026-05):** see [`SECURITY.md`](../SECURITY.md). For non-local deploys: enable Kestra auth / reverse proxy.
+- **Personal challenge files** (`LOOM_SCRIPT.md`, `SOCIAL_POST.md`, `blogpost-draft.md`) are **gitignored** — maintain locally if needed for [#KestraAcademy](https://www.wemakedevs.org/orchestration) posts.

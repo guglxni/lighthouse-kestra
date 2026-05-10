@@ -120,6 +120,7 @@ services:
       SECRET_GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       SECRET_REDDIT_USER_AGENT: ${REDDIT_USER_AGENT:-lighthouse-research/0.1}
       SECRET_EXA_API_KEY: ${EXA_API_KEY:-}
+      SECRET_EXA_API_BASE: ${EXA_API_BASE:-https://api.exa.ai}
       SECRET_POSTGRES_HOST: postgres
       SECRET_POSTGRES_PORT: "5432"
       SECRET_POSTGRES_DB: ${POSTGRES_DB:-lighthouse}

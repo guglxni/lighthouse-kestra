@@ -17,7 +17,9 @@ delivers a daily brief to your channels. Everything is configured via a single
 YAML topic profile, so spinning up a brief for a new topic takes one file — no
 code changes.
 
-**LLM / BYOK:** Models are **not** locked to a single vendor. Kestra talks **OpenAI-compatible** HTTP to LiteLLM (or any gateway you point `LITELLM_BASE_URL` at). You define providers and aliases in [`infra/litellm/config.yaml`](infra/litellm/config.yaml). See [`docs/BYOK.md`](docs/BYOK.md) and optional **Exa** enrichment in [`flows/ingest/exa_search.yaml`](flows/ingest/exa_search.yaml).
+**LLM / BYOK:** Models are **not** locked to a single vendor. Kestra talks **OpenAI-compatible** HTTP to LiteLLM (or any gateway you point `LITELLM_BASE_URL` at). You define providers and aliases in [`infra/litellm/config.yaml`](infra/litellm/config.yaml). See [`docs/BYOK.md`](docs/BYOK.md) (includes **Exa BYOK** for semantic search).
+
+**Real ingest, no mocks:** All seven core source types call live APIs/feeds and persist to Postgres (see [`docs/INGEST_SOURCES.md`](docs/INGEST_SOURCES.md)). **Heroku / student credits:** see [`docs/DEPLOY_HEROKU.md`](docs/DEPLOY_HEROKU.md) — the default stack targets Docker Compose; full Heroku parity is non-trivial.
 
 Four topic profiles ship preconfigured:
 
@@ -60,6 +62,7 @@ Required secrets (set in `.env` or your secret manager):
 | `SEARXNG_URL` | Self-hosted meta-search for chat |
 | `GITHUB_TOKEN` | GitHub trending |
 | `REDDIT_USER_AGENT` | Reddit JSON polling |
+| `EXA_API_KEY`, `EXA_API_BASE` | Optional Exa search (BYOK); base defaults to `https://api.exa.ai` |
 | `S3_BUCKET`, `S3_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | Archive (gc flow) |
 | `POSTGRES_*` | Auto-set by docker-compose |
 
@@ -121,7 +124,7 @@ flowchart LR
     deliver -. FAILED/WARNING .-> alert
 ```
 
-Deeper dive in [`ARCHITECTURE.md`](ARCHITECTURE.md).
+Deeper dive in [`ARCHITECTURE.md`](ARCHITECTURE.md). **Ingest source inventory** (all live APIs / feeds): [`docs/INGEST_SOURCES.md`](docs/INGEST_SOURCES.md).
 
 ### Architecture graph (Graphify)
 
@@ -215,21 +218,13 @@ lighthouse/
   infra/           docker-compose.yml Dockerfile.worker
   blueprint/       lighthouse-research-quickstart.yaml PR_BODY.md
   .github/workflows/validate-flows.yml
-  README.md ARCHITECTURE.md CONVENTIONS.md docs/graphify/ scripts/graphify_lighthouse.sh
-  LOOM_SCRIPT.md SOCIAL_POST.md blogpost-draft.md docs/TODO.md LICENSE
+  README.md ARCHITECTURE.md CONVENTIONS.md docs/ SECURITY.md scripts/graphify_lighthouse.sh
+  docs/TODO.md LICENSE
 ```
 
 ## Screenshots
 
-<!-- Add after first run:
-![Dashboard](docs/img/dashboard.png)
-![Chat the brief](docs/img/chat.png)
-![Deep-dive](docs/img/deepdive.png)
-![Brief in Slack](docs/img/slack.png)
-![Brief in Notion](docs/img/notion.png)
-![Failure alert](docs/img/alert.png)
--->
-_(Placeholders — captured during the Loom walkthrough; see [`LOOM_SCRIPT.md`](LOOM_SCRIPT.md).)_
+Optional: add images under `docs/img/` after your first successful run (dashboard, chat, brief in Slack/Notion, etc.) and reference them here.
 
 ## Security
 

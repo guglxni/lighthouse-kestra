@@ -1,8 +1,10 @@
 id: exa_search
 namespace: company.team.lighthouse.ingest
 description: |
-  Optional semantic search enrichment via Exa (`EXA_API_KEY`). Uses
-  `allowFailure: true` when the key is absent or the API errors.
+  Optional semantic search enrichment — **Exa BYOK** (`EXA_API_KEY`).
+  Override API origin with `EXA_API_BASE` if Exa or a proxy uses a custom
+  base URL (default `https://api.exa.ai`). `allowFailure: true` when the key
+  is absent or the API errors.
 
 labels:
   layer: ingest
@@ -19,7 +21,7 @@ inputs:
 tasks:
   - id: search
     type: io.kestra.plugin.core.http.Request
-    uri: https://api.exa.ai/search
+    uri: "{{ secret('EXA_API_BASE') }}/search"
     method: POST
     contentType: application/json
     headers:

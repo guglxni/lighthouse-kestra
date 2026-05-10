@@ -58,6 +58,7 @@ All referenced as `{{ secret('NAME') }}`:
 | `AZURE_OPENAI_API_KEY` | Azure OpenAI key for Kimi deployment |
 | `AZURE_OPENAI_DEPLOYMENT_KIMI` | Azure **deployment name** for Kimi K2.6 (maps to `modelName` on `AzureOpenAI` provider) |
 | `EXA_API_KEY` | Optional Exa semantic search (`flows/ingest/exa_search.yaml` / brief enrichment) |
+| `EXA_API_BASE` | Exa API origin only (default `https://api.exa.ai`; flow calls `{base}/search`) |
 | `ANTHROPIC_API_KEY` | Optional **tertiary** fallback only (not the primary stack) |
 | `NOTION_API_KEY` | Brief delivery |
 | `SLACK_WEBHOOK_URL` | **Monitors only** — Slack *Incoming Webhook* URL (`flows/monitors/alerts.yaml`) |
