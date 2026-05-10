@@ -1,31 +1,69 @@
 id: dashboard
-namespace: company.team.lighthouse.apps
+namespace: company.team.lighthouse.serve
+type: io.kestra.plugin.ee.apps.App
 description: |
-  App-backend flow: returns the latest brief Markdown for a topic (bind in Kestra Apps UI).
+  Lighthouse dashboard — pick a topic, see today's brief, jump to chat or
+  deep-dive. Renders the latest `lh.briefs` row for the selected topic.
 
-inputs:
-  - id: topic_id
-    type: STRING
-    defaults: agentic-eng
+labels:
+  layer: app
 
-tasks:
-  - id: latest
-    type: io.kestra.plugin.jdbc.postgresql.Query
-    url: "jdbc:postgresql://{{ secret('POSTGRES_HOST') }}:{{ secret('POSTGRES_PORT') }}/{{ secret('POSTGRES_DB') }}"
-    username: "{{ secret('POSTGRES_USER') }}"
-    password: "{{ secret('POSTGRES_PASSWORD') }}"
-    sql: |
-      SELECT markdown FROM lh.briefs
-      WHERE topic_id = '{{ inputs.topic_id }}'
-      ORDER BY date DESC
-      LIMIT 1;
-    fetchType: FETCH_ONE
+blocks:
+  - id: header
+    type: io.kestra.plugin.ee.apps.blocks.Markdown
+    content: |
+      # Lighthouse — Research OS
+      One engine, four topics, daily briefs.
 
-  - id: show
-    type: io.kestra.plugin.core.log.Log
-    message: "Latest brief fetched for topic={{ inputs.topic_id }} (see Outputs on `latest`)."
+  - id: topic_picker
+    type: io.kestra.plugin.ee.apps.blocks.Form
+    title: Select topic
+    submitLabel: Refresh
+    inputs:
+      - id: topic_id
+        type: SELECT
+        values:
+          - agentic-eng
+          - solana-zk
+          - indie-saas
+          - data-eng-ai
+        defaults: agentic-eng
 
-triggers:
-  - id: webhook
-    type: io.kestra.plugin.core.trigger.Webhook
-    key: app-dashboard
+  - id: today_brief
+    type: io.kestra.plugin.ee.apps.blocks.Markdown
+    content: |
+      ## Today's brief — {{ block('topic_picker').topic_id }}
+
+      The deploying flow `lighthouse.process.cluster_summarize` writes the
+      brief into `lh.briefs`; the table block below reads it.
+
+  - id: brief_table
+    type: io.kestra.plugin.ee.apps.blocks.Table
+    description: Latest brief for the picked topic.
+    query:
+      type: io.kestra.plugin.jdbc.postgresql.Query
+      url: "jdbc:postgresql://{{ secret('POSTGRES_HOST') }}:{{ secret('POSTGRES_PORT') }}/{{ secret('POSTGRES_DB') }}"
+      username: "{{ secret('POSTGRES_USER') }}"
+      password: "{{ secret('POSTGRES_PASSWORD') }}"
+      sql: |
+        SELECT date, jsonb_array_length(clusters) AS clusters, delivered_to
+        FROM lh.briefs
+        WHERE topic_id = '{{ block("topic_picker").topic_id }}'
+        ORDER BY date DESC
+        LIMIT 14;
+
+  - id: open_chat
+    type: io.kestra.plugin.ee.apps.blocks.Link
+    label: Open chat-the-brief →
+    href: "/ui/apps/company.team.lighthouse.serve/chat?topic_id={{ block('topic_picker').topic_id }}"
+
+  - id: open_deepdive
+    type: io.kestra.plugin.ee.apps.blocks.Link
+    label: Run a deep-dive →
+    href: "/ui/apps/company.team.lighthouse.serve/deepdive?topic_id={{ block('topic_picker').topic_id }}"
+
+  - id: footer
+    type: io.kestra.plugin.ee.apps.blocks.Markdown
+    content: |
+      ---
+      Built with Kestra. Source: github.com/aaryanguglani/lighthouse · #KestraAcademy
