@@ -30,7 +30,8 @@ services:
       - "5432:5432"
 
   litellm:
-    image: ghcr.io/berriai/litellm:main-latest
+    # Pin for supply-chain reproducibility (bump intentionally when upgrading).
+    image: ghcr.io/berriai/litellm:v1.82.3-stable
     container_name: lighthouse-litellm
     restart: unless-stopped
     depends_on:
@@ -52,6 +53,8 @@ services:
     image: kestra/kestra:v0.21.0
     container_name: lighthouse-kestra
     restart: unless-stopped
+    # root + Docker socket: required for Script tasks with Docker runner in this demo stack.
+    # For production, use a dedicated worker tier and disable UI basic-auth only behind a reverse proxy.
     user: "root"
     pull_policy: missing
     command: server standalone --worker-thread=8
@@ -71,6 +74,7 @@ services:
         kestra:
           server:
             basic-auth:
+              # Dev default: off. For any host-exposed deployment set true and define users.
               enabled: false
           repository:
             type: postgres
@@ -96,6 +100,8 @@ services:
       SECRET_NOTION_API_KEY: ${NOTION_API_KEY:-}
       SECRET_SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
       SECRET_SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      # Base URL for alert deep-links (monitors/alerts); no trailing slash.
+      SECRET_KESTRA_PUBLIC_URL: ${KESTRA_PUBLIC_URL:-http://localhost:8080}
       SECRET_DISCORD_WEBHOOK_AGENTIC: ${DISCORD_WEBHOOK_AGENTIC:-}
       SECRET_DISCORD_WEBHOOK_SOLANA: ${DISCORD_WEBHOOK_SOLANA:-}
       SECRET_DISCORD_WEBHOOK_INDIE: ${DISCORD_WEBHOOK_INDIE:-}

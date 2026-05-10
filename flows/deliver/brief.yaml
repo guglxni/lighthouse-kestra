@@ -75,6 +75,9 @@ tasks:
           targets.append(("slack", slack))
 
       for kind, url in targets:
+          if not url.startswith("https://"):
+              print(f"skip {kind}: webhook must use https://")
+              continue
           if kind == "discord":
               payload = {"content": text}
           else:

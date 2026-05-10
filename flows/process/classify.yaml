@@ -104,19 +104,22 @@ tasks:
               data = chat_json(primary, sys_prompt, user_msg)
               model_used = primary
           except Exception as exc:
-            print(f"primary model failed for {doc_id}: {exc}")
-            if not use_multi:
-              continue
-            try:
-              data = chat_json(fallback, sys_prompt, user_msg)
-              model_used = fallback
-            except Exception as exc2:
-              print(f"fallback model failed for {doc_id}: {exc2}")
-              continue
+              print(f"primary model failed for {doc_id}: {exc}")
+              if not use_multi:
+                  continue
+              try:
+                  data = chat_json(fallback, sys_prompt, user_msg)
+                  model_used = fallback
+              except Exception as exc2:
+                  print(f"fallback model failed for {doc_id}: {exc2}")
+                  continue
 
           rel = float(data.get("relevance", 0))
           cat = data.get("category")
           tags = data.get("tags") or []
+          if not isinstance(tags, list):
+              tags = [str(tags)] if tags is not None else []
+          tags = [str(t) for t in tags][:64]
           rationale = data.get("rationale")
 
           with conn.cursor() as cur:

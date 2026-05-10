@@ -23,20 +23,14 @@ inputs:
     type: STRING
 
 tasks:
+  # Incoming Webhooks use a unique URL per workspace integration — not chat.postMessage.
+  # See https://api.slack.com/messaging/webhooks — payload must be {"text": "..."} or include blocks.
   - id: pager
     type: io.kestra.plugin.notifications.slack.SlackIncomingWebhook
-    url: "https://slack.com/api/chat.postMessage"
+    url: "{{ secret('SLACK_WEBHOOK_URL') }}"
     payload: |
       {
-        "channel": "#lighthouse-alerts",
-        "text": ":rotating_light: *Lighthouse {{ inputs.failed_state }}* — `{{ inputs.failed_namespace }}.{{ inputs.failed_flow }}`",
-        "blocks": [
-          {"type":"header","text":{"type":"plain_text","text":"Lighthouse {{ inputs.failed_state }}"}},
-          {"type":"section","fields":[
-            {"type":"mrkdwn","text":"*Flow*\n`{{ inputs.failed_namespace }}.{{ inputs.failed_flow }}`"},
-            {"type":"mrkdwn","text":"*Execution*\n<{{ kestra.url ?? 'http://localhost:8080' }}/ui/executions/{{ inputs.failed_namespace }}/{{ inputs.failed_flow }}/{{ inputs.failed_execution_id }}|open>"}
-          ]}
-        ]
+        "text": ":rotating_light: *Lighthouse {{ inputs.failed_state }}*\n• *Flow:* `{{ inputs.failed_namespace }}.{{ inputs.failed_flow }}`\n• *Execution id:* `{{ inputs.failed_execution_id }}`\n• Open in UI: {{ secret('KESTRA_PUBLIC_URL') }}/ui/executions/{{ inputs.failed_namespace }}/{{ inputs.failed_flow }}/{{ inputs.failed_execution_id }}\n_If the link 404s, paste the id into Kestra’s Executions search._"
       }
     retry:
       type: constant

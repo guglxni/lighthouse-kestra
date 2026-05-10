@@ -60,7 +60,9 @@ All referenced as `{{ secret('NAME') }}`:
 | `EXA_API_KEY` | Optional Exa semantic search (`flows/ingest/exa_search.yaml` / brief enrichment) |
 | `ANTHROPIC_API_KEY` | Optional **tertiary** fallback only (not the primary stack) |
 | `NOTION_API_KEY` | Brief delivery |
-| `SLACK_BOT_TOKEN` | Slack delivery + monitors pager |
+| `SLACK_WEBHOOK_URL` | **Monitors only** — Slack *Incoming Webhook* URL (`flows/monitors/alerts.yaml`) |
+| `SLACK_BOT_TOKEN` | Optional / reserved (not used by current flows; brief uses webhooks) |
+| `KESTRA_PUBLIC_URL` | Public UI base for alert deep-links (no trailing slash) |
 | `DISCORD_WEBHOOK_AGENTIC` / `_SOLANA` / `_INDIE` / `_DATAENG` | Per-topic Discord webhooks |
 | `SENDGRID_API_KEY` | Email delivery |
 | `MINIFLUX_TOKEN`, `MINIFLUX_URL` | RSS aggregator |

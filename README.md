@@ -43,7 +43,9 @@ Required secrets (set in `.env` or your secret manager):
 | `AZURE_OPENAI_*`, `LITELLM_MODEL_FALLBACK` | Optional multi-tier / Azure Kimi fallback |
 | `ANTHROPIC_API_KEY`, `GEMINI_API_KEY` | Optional extra providers in LiteLLM config |
 | `NOTION_API_KEY`, `NOTION_PAGE_<TOPIC>` | Brief delivery |
-| `SLACK_BOT_TOKEN` | Slack delivery + monitors pager |
+| `SLACK_WEBHOOK_URL` | Monitors pager (**Incoming Webhook** — required for `flows/monitors/alerts.yaml`) |
+| `SLACK_BOT_TOKEN` | Reserved / optional (delivery flows use webhooks where noted) |
+| `KESTRA_PUBLIC_URL` | Base URL in alert messages (no trailing slash) |
 | `DISCORD_WEBHOOK_<TOPIC>` | Discord delivery |
 | `SENDGRID_API_KEY` | Email delivery |
 | `MINIFLUX_TOKEN`, `MINIFLUX_URL` | RSS aggregator |
@@ -220,6 +222,10 @@ lighthouse/
 ![Failure alert](docs/img/alert.png)
 -->
 _(Placeholders — captured during the Loom walkthrough; see [`LOOM_SCRIPT.md`](LOOM_SCRIPT.md).)_
+
+## Security
+
+See [`SECURITY.md`](SECURITY.md) for the threat model (Docker socket, unauthenticated UI, webhook URLs, dependency pins) and how to report issues.
 
 ## Contributing
 

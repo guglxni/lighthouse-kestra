@@ -14,6 +14,8 @@ keys, and schemas.
 | Meta-search | SearxNG | Backs the chat App's optional web search; same backend Perplexica uses |
 | Worker image | Debian-slim Python 3.11 | yt-dlp, faster-whisper, trafilatura, gpt-researcher, bertopic, sentence-transformers, markitdown, playwright |
 
+See [`SECURITY.md`](SECURITY.md) for Docker-socket exposure, unauthenticated UI defaults, webhook hardening, and image pinning guidance.
+
 ## 2. Sequence — daily brief, end-to-end
 
 ```mermaid
