@@ -17,7 +17,7 @@ jobs:
     name: yamllint + python yaml.safe_load
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -51,7 +51,7 @@ jobs:
       image: kestra/kestra:v0.21.0
       options: --user root
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Validate flows
         run: |
           /app/kestra flow validate flows/ \
