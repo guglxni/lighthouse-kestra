@@ -1,25 +1,257 @@
-id: research_quickstart
-namespace: company.team.blueprint
+id: lighthouse-research-quickstart
+namespace: company.team
 description: |
-  Slim blueprint — HTTP fetch + LiteLLM_CLASSIFICATION via OpenAI-compatible proxy.
-  Propose upstream to `kestra-io/blueprints` after tailoring secrets.
+  Lighthouse Research Quickstart — a single-file, single-topic, single-LLM
+  variant of the full Lighthouse research OS (github.com/aaryanguglani/lighthouse).
+  Pulls today's RSS + arxiv items for one topic, embeds them in pgvector,
+  classifies + summarises with Gemini, and posts the brief to Notion.
+  Ready to fork: replace the `topic.*` variables and the four secrets at the
+  top of `taskDefaults` to retarget any research domain.
+
+labels:
+  showcase: lighthouse
+  category: ai
 
 inputs:
-  - id: prompt
+  - id: topic_name
     type: STRING
-    defaults: Classify Kestra as product, research, or other.
+    defaults: "Agentic Engineering"
+  - id: rss_feeds
+    type: ARRAY
+    itemType: STRING
+    defaults:
+      - https://www.anthropic.com/news/rss.xml
+      - https://openai.com/blog/rss.xml
+      - https://huggingface.co/blog/feed.xml
+  - id: arxiv_categories
+    type: ARRAY
+    itemType: STRING
+    defaults:
+      - cs.AI
+      - cs.CL
+  - id: notion_page_id
+    type: STRING
+  - id: relevance_floor
+    type: FLOAT
+    defaults: 0.55
+
+variables:
+  pg_url: "jdbc:postgresql://{{ secret('POSTGRES_HOST') }}:{{ secret('POSTGRES_PORT') }}/{{ secret('POSTGRES_DB') }}"
+
+taskDefaults:
+  - type: io.kestra.plugin.jdbc.postgresql.Query
+    values:
+      url: "{{ vars.pg_url }}"
+      username: "{{ secret('POSTGRES_USER') }}"
+      password: "{{ secret('POSTGRES_PASSWORD') }}"
+  - type: io.kestra.plugin.jdbc.postgresql.Queries
+    values:
+      url: "{{ vars.pg_url }}"
+      username: "{{ secret('POSTGRES_USER') }}"
+      password: "{{ secret('POSTGRES_PASSWORD') }}"
 
 tasks:
+  - id: bootstrap_schema
+    type: io.kestra.plugin.jdbc.postgresql.Queries
+    description: Idempotent schema bootstrap so the blueprint runs on a fresh DB.
+    sql: |
+      CREATE EXTENSION IF NOT EXISTS vector;
+      CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+      CREATE SCHEMA IF NOT EXISTS lh;
+      CREATE TABLE IF NOT EXISTS lh.documents (
+          id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+          source TEXT, source_id TEXT, url TEXT, title TEXT,
+          published_at TIMESTAMPTZ, raw_text TEXT, metadata JSONB DEFAULT '{}'::jsonb,
+          UNIQUE (source, source_id)
+      );
+      CREATE TABLE IF NOT EXISTS lh.embeddings (
+          document_id UUID PRIMARY KEY REFERENCES lh.documents(id) ON DELETE CASCADE,
+          embedding vector(1536) NOT NULL
+      );
+
+  - id: fetch_sources
+    type: io.kestra.plugin.scripts.python.Script
+    description: Pulls RSS + arxiv into one shape; no Miniflux needed for the quickstart.
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      image: python:3.11-slim
+    beforeCommands:
+      - "pip install --quiet feedparser==6.0.11 arxiv==2.1.3 httpx==0.28.1"
+    inputFiles:
+      feeds.json: "{{ inputs.rss_feeds | json }}"
+      cats.json: "{{ inputs.arxiv_categories | json }}"
+    outputFiles:
+      - documents.json
+    script: |
+      import json, hashlib
+      from datetime import datetime, timezone, timedelta
+      import feedparser, arxiv
+
+      since = datetime.now(timezone.utc) - timedelta(days=2)
+      docs = []
+
+      for url in json.load(open("feeds.json")):
+          feed = feedparser.parse(url)
+          for entry in feed.entries[:30]:
+              published = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc) if getattr(entry, "published_parsed", None) else None
+              if published and published < since:
+                  continue
+              docs.append({
+                  "source": "rss",
+                  "source_id": hashlib.sha1((entry.get("id") or entry.link).encode()).hexdigest(),
+                  "url": entry.link,
+                  "title": entry.title,
+                  "published_at": (published or datetime.now(timezone.utc)).isoformat(),
+                  "raw_text": entry.get("summary", "")[:4000],
+              })
+
+      cats = json.load(open("cats.json"))
+      if cats:
+          q = " OR ".join(f"cat:{c}" for c in cats)
+          client = arxiv.Client(page_size=50, num_retries=2)
+          for r in client.results(arxiv.Search(query=q, max_results=50, sort_by=arxiv.SortCriterion.SubmittedDate)):
+              if r.published < since:
+                  continue
+              docs.append({
+                  "source": "arxiv",
+                  "source_id": r.entry_id.rsplit("/",1)[-1],
+                  "url": r.entry_id,
+                  "title": r.title,
+                  "published_at": r.published.isoformat(),
+                  "raw_text": r.summary[:4000],
+              })
+
+      json.dump(docs, open("documents.json","w"), ensure_ascii=False)
+      print(f"prepared {len(docs)} documents")
+
+  - id: insert_documents
+    type: io.kestra.plugin.jdbc.postgresql.Queries
+    sqlType: PREPARED
+    sql: |
+      INSERT INTO lh.documents (source, source_id, url, title, published_at, raw_text)
+      SELECT d->>'source', d->>'source_id', d->>'url', d->>'title',
+             NULLIF(d->>'published_at','')::timestamptz, d->>'raw_text'
+      FROM jsonb_array_elements('{{ read(outputs.fetch_sources.outputFiles['documents.json']) }}'::jsonb) AS d
+      ON CONFLICT (source, source_id) DO NOTHING
+      RETURNING id;
+    fetchType: STORE
+
+  - id: select_unembedded
+    type: io.kestra.plugin.jdbc.postgresql.Query
+    sql: |
+      SELECT id::text, title, raw_text
+      FROM lh.documents d
+      WHERE NOT EXISTS (SELECT 1 FROM lh.embeddings e WHERE e.document_id = d.id)
+      LIMIT 100;
+    fetchType: FETCH
+
+  - id: embed
+    type: io.kestra.plugin.scripts.python.Script
+    runIf: "{{ outputs.select_unembedded.size > 0 }}"
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      image: python:3.11-slim
+    beforeCommands:
+      - "pip install --quiet openai==1.59.7"
+    env:
+      OPENAI_API_KEY: "{{ secret('OPENAI_API_KEY') }}"
+    inputFiles:
+      rows.json: "{{ outputs.select_unembedded.rows | json }}"
+    outputFiles:
+      - embeddings.json
+    script: |
+      import json, os
+      from openai import OpenAI
+      rows = json.load(open("rows.json"))
+      texts = [((r.get("title") or "") + "\n\n" + (r.get("raw_text") or ""))[:8000] or "empty" for r in rows]
+      client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+      out = []
+      B = 64
+      for i in range(0, len(rows), B):
+          resp = client.embeddings.create(model="text-embedding-3-small", input=texts[i:i+B])
+          for row, item in zip(rows[i:i+B], resp.data):
+              out.append({
+                  "document_id": row["id"],
+                  "embedding": "[" + ",".join(f"{v:.6f}" for v in item.embedding) + "]",
+              })
+      json.dump(out, open("embeddings.json","w"))
+
+  - id: insert_embeddings
+    type: io.kestra.plugin.jdbc.postgresql.Queries
+    runIf: "{{ outputs.select_unembedded.size > 0 }}"
+    sqlType: PREPARED
+    sql: |
+      INSERT INTO lh.embeddings (document_id, embedding)
+      SELECT (d->>'document_id')::uuid, (d->>'embedding')::vector
+      FROM jsonb_array_elements('{{ read(outputs.embed.outputFiles['embeddings.json']) }}'::jsonb) AS d
+      ON CONFLICT (document_id) DO NOTHING;
+
   - id: classify
     type: io.kestra.plugin.ai.completion.Classification
-    allowFailure: true
+    description: Single-LLM variant; the full Lighthouse adds Claude + GPT fallbacks.
     provider:
-      type: io.kestra.plugin.ai.provider.OpenAI
-      apiKey: "{{ secret('LITELLM_API_KEY') }}"
-      baseUrl: "{{ secret('LITELLM_BASE_URL') }}"
-      modelName: "{{ secret('LITELLM_MODEL_PRIMARY') }}"
-    classes:
-      - product
-      - research
-      - other
-    prompt: "{{ inputs.prompt }}"
+      type: io.kestra.plugin.ai.provider.GoogleGemini
+      modelName: gemini-2.5-flash
+      apiKey: "{{ secret('GEMINI_API_KEY') }}"
+    prompt: |
+      Score 0–1 relevance to the topic "{{ inputs.topic_name }}" for each item below.
+      Return a strict JSON array with {document_id, relevance, headline} objects.
+      ITEMS:
+      {{ outputs.select_unembedded.rows | json }}
+    classes: ["relevant","tangential","irrelevant"]
+    retry:
+      type: constant
+      maxAttempts: 3
+      interval: PT1S
+
+  - id: assemble_brief
+    type: io.kestra.plugin.ai.completion.ChatCompletion
+    provider:
+      type: io.kestra.plugin.ai.provider.GoogleGemini
+      modelName: gemini-2.5-pro
+      apiKey: "{{ secret('GEMINI_API_KEY') }}"
+    messages:
+      - role: user
+        content: |
+          Write a Markdown research brief titled "{{ inputs.topic_name }} — {{ now() | date('yyyy-MM-dd') }}".
+          Use only items with relevance >= {{ inputs.relevance_floor }} from the classifier output below.
+          For each, one bullet with the concrete fact and the source URL at the end.
+
+          CLASSIFIED:
+          {{ outputs.classify }}
+
+          DOCUMENTS:
+          {{ outputs.select_unembedded.rows | json }}
+
+  - id: deliver_notion
+    type: io.kestra.plugin.notion.blocks.CreatePage
+    apiKey: "{{ secret('NOTION_API_KEY') }}"
+    parent:
+      page_id: "{{ inputs.notion_page_id }}"
+    properties:
+      title:
+        - text:
+            content: "{{ inputs.topic_name }} — {{ now() | date('yyyy-MM-dd') }}"
+    children:
+      - object: block
+        type: paragraph
+        paragraph:
+          rich_text:
+            - type: text
+              text:
+                content: "{{ outputs.assemble_brief.text | truncate(1900) }}"
+    retry:
+      type: constant
+      maxAttempts: 3
+      interval: PT2S
+
+triggers:
+  - id: daily
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "0 8 * * *"
+
+errors:
+  - id: log_failure
+    type: io.kestra.plugin.core.log.Log
+    level: ERROR
+    message: "lighthouse-research-quickstart failed: {{ errorLogs() }}"

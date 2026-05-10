@@ -1,52 +1,198 @@
-# Lighthouse
+# Lighthouse — A Configurable Multi-Source Research OS, Orchestrated by Kestra
 
-Multi-source **research OS** orchestrated with [**Kestra**](https://kestra.io): scheduled ingest, pgvector embeddings, LiteLLM **BYOK** (single- or multi-model), optional Exa enrichment, and briefing delivery.
+> One engine. Four topic profiles. Daily research briefs to Notion, Slack, Discord, and email. Chat-the-brief and on-demand deep-dives via Kestra Apps. Drop a YAML topic file in, get a personalised brief tomorrow.
+
+[![Validate flows](https://github.com/aaryanguglani/lighthouse/actions/workflows/validate-flows.yml/badge.svg)](https://github.com/aaryanguglani/lighthouse/actions/workflows/validate-flows.yml)
+
+---
+
+## What it is
+
+Lighthouse is a research operating system built entirely on Kestra. It ingests
+RSS, arxiv, GitHub trending, HN/Reddit, transcribed YouTube/podcasts, and any
+arbitrary web URL; embeds and de-duplicates everything in pgvector; classifies
+and summarises with a multi-LLM fallback chain (Gemini 2.5 → Claude 4 → GPT-5);
+and delivers a daily brief to your channels. Everything is configured via a
+single YAML topic profile, so spinning up a brief for a new topic takes one
+file — no code changes.
+
+Four topic profiles ship preconfigured:
+
+- `agentic-eng` — Anthropic / OpenAI / Cursor / MCP / agent frameworks
+- `solana-zk` — Solana protocol + ZK proof systems + audits
+- `indie-saas` — Bootstrapped SaaS, distribution, growth case studies
+- `data-eng-ai` — Lakehouse, orchestration, vector DBs, RAG infra
 
 ## Quickstart
 
-1. Copy env template: `cp .env.example .env`
-2. Set **at minimum** `OPENAI_API_KEY` (for LiteLLM upstream) and choose `LITELLM_API_KEY` (proxy master key).
-3. `docker compose -f infra/docker-compose.yml up -d`
-4. Open Kestra at `http://localhost:8080`, sync `flows/`, run an ingest flow (ex: `company.team.lighthouse.ingest.rss`).
+```bash
+git clone https://github.com/aaryanguglani/lighthouse.git
+cd lighthouse
+cp .env.example .env       # fill in OPENAI_API_KEY, GEMINI_API_KEY, …
+docker compose -f infra/docker-compose.yml up -d
+open http://localhost:8080 # Kestra UI; Apps live under /ui/apps
+```
 
-See `CONVENTIONS.md` for namespaces, secrets, and LiteLLM modes.
+Required secrets (set in `.env` or your secret manager):
 
-## LiteLLM BYOK
-
-- Flows call **`http://litellm:4000/v1`** with `secret('LITELLM_API_KEY')` and model names from `LITELLM_MODEL_*` — not raw provider keys inside YAML.
-- **`LITELLM_MODE=single`**: one logical model per step.
-- **`LITELLM_MODE=multi`**: extend `infra/litellm/config.yaml` with router/fallbacks; optionally set flow input `use_multi_llm: true` to exercise Kestra-side `runIf` fallbacks documented in `flows/process/classify.yaml`.
-
-## Stack (docker compose)
-
-| Service | Role |
+| Secret | Purpose |
 | --- | --- |
-| Postgres + pgvector | App schema `lh` + Kestra + Miniflux DB |
-| Kestra | Orchestration, Apps, AI + JDBC plugins |
-| LiteLLM | OpenAI-compatible proxy / router |
-| Miniflux | RSS aggregation + webhooks |
-| SearxNG | Self-hosted meta search |
-| worker image | yt-dlp, Whisper, trafilatura, research helpers |
+| `OPENAI_API_KEY` | Embeddings + GPT-5 fallback |
+| `ANTHROPIC_API_KEY` | Claude Haiku/Sonnet fallback |
+| `GEMINI_API_KEY` | Gemini 2.5 Flash/Pro primary |
+| `NOTION_API_KEY`, `NOTION_PAGE_<TOPIC>` | Brief delivery |
+| `SLACK_BOT_TOKEN` | Slack delivery + monitors pager |
+| `DISCORD_WEBHOOK_<TOPIC>` | Discord delivery |
+| `SENDGRID_API_KEY` | Email delivery |
+| `MINIFLUX_TOKEN`, `MINIFLUX_URL` | RSS aggregator |
+| `SEARXNG_URL` | Self-hosted meta-search for chat |
+| `GITHUB_TOKEN` | GitHub trending |
+| `REDDIT_USER_AGENT` | Reddit JSON polling |
+| `S3_BUCKET`, `S3_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | Archive (gc flow) |
+| `POSTGRES_*` | Auto-set by docker-compose |
 
-## Key paths
+Full list and default values in [`.env.example`](.env.example).
 
-- `flows/` — production-shaped flows (`ingest`, `process`, `deliver`, `serve`, `monitors`, `apps`)
-- `infra/docker-compose.yml` — stack definition
-- `infra/litellm/config.yaml` — LiteLLM routes / placeholders
-- `sql/` — pgvector + `lh` schema
-- `topics/` — topic profiles (mirrored under `flows/_namespace_files/topics/` for Git sync)
-- `tests/flow_tests/` — structural YAML tests
-- `.github/workflows/validate-flows.yml` — CI YAML validation
+## Architecture
 
-## Optional: Exa + Slack
+```mermaid
+flowchart LR
+    subgraph sources [Sources]
+        rss[RSS via Miniflux]
+        arxiv[arxiv API]
+        ghtrend[GitHub trending]
+        hn[HN Algolia + Reddit JSON]
+        yt[YouTube + Podcasts]
+        web[Web articles]
+    end
 
-- `EXA_API_KEY` enables `flows/ingest/exa_search.yaml` (HTTP to Exa; `allowFailure: true`).
-- `SLACK_WEBHOOK_URL` feeds `flows/monitors/alerts.yaml`.
+    subgraph ingest [Ingest namespace]
+        ingrss[lighthouse.ingest.rss]
+        ingarxiv[lighthouse.ingest.arxiv]
+        inggh[lighthouse.ingest.github_trending]
+        inghn[lighthouse.ingest.hn_reddit]
+        ingav[lighthouse.ingest.audio_video]
+        ingweb[lighthouse.ingest.web_articles]
+    end
 
-## Authoring with Kestra MCP
+    subgraph process [Process namespace]
+        embed[embed_dedup<br/>pgvector]
+        classify[classify<br/>multi-LLM fallback]
+        cluster[cluster_summarize<br/>BERTopic + AI Agent]
+    end
 
-Use [`https://api.kestra.io/v1/mcp`](https://api.kestra.io/v1/mcp) (`task_schema`, `plugin_tasks`, …) so plugin YAML stays valid.
+    subgraph deliver [Deliver namespace]
+        brief[deliver.brief<br/>Notion + Slack + Discord + email]
+        chat[serve.chat_brief<br/>Kestra App]
+        deep[serve.deepdive<br/>GPT-Researcher in Docker]
+    end
+
+    subgraph monitor [Monitors namespace]
+        alert[monitors.alerts<br/>single Slack pager]
+        gc[maintenance.gc<br/>archive + prune]
+    end
+
+    rss --> ingrss
+    arxiv --> ingarxiv
+    ghtrend --> inggh
+    hn --> inghn
+    yt --> ingav
+    web --> ingweb
+
+    ingrss & ingarxiv & inggh & inghn & ingav & ingweb --> embed
+    embed --> classify --> cluster --> brief
+    cluster --> chat
+    cluster --> deep
+
+    ingest -. FAILED/WARNING .-> alert
+    process -. FAILED/WARNING .-> alert
+    deliver -. FAILED/WARNING .-> alert
+```
+
+Deeper dive in [`ARCHITECTURE.md`](ARCHITECTURE.md).
+
+## Feature → Kestra capability mapping
+
+| Feature | Kestra capability | Where |
+| --- | --- | --- |
+| Realtime trigger on new RSS items | `io.kestra.plugin.core.trigger.Webhook` | `flows/ingest/rss.yaml` |
+| Schedules everywhere | `io.kestra.plugin.core.trigger.Schedule` | every ingest + `deliver/brief.yaml` |
+| Fan-in on any ingest success | `io.kestra.plugin.core.trigger.Flow` | `flows/process/embed_dedup.yaml` |
+| Multi-LLM fallback chain | `io.kestra.plugin.ai.completion.Classification` + `runIf` | `flows/process/classify.yaml` |
+| Multi-tier extraction fallback | `io.kestra.plugin.scripts.python.Script` chain with `runIf` | `flows/ingest/web_articles.yaml` |
+| Concurrency limits | `concurrency.limit + behavior: QUEUE` | every ingest/process flow |
+| Retries | `retry.constant` on every external call | every flow |
+| `allowFailure` for graceful degradation | per-task `allowFailure: true` | every fallback tier + every delivery channel |
+| Apps UI | `io.kestra.plugin.ee.apps.App` blocks | `flows/apps/*` |
+| Namespace files (topic profiles) | `_namespace_files/topics/*.yaml` | `flows/_namespace_files/topics/` |
+| KV store (watermarks, chat history) | `io.kestra.plugin.core.kv.{Get,Set}` | every ingest flow + chat |
+| Secrets | `{{ secret('NAME') }}` | every external call |
+| Docker task runner | `io.kestra.plugin.scripts.runner.docker.Docker` | Whisper, Trafilatura, BERTopic, GPT-Researcher |
+| Postgres JDBC plugin (pgvector) | `io.kestra.plugin.jdbc.postgresql.{Query,Queries}` | dedup, search, brief assembly |
+| Notion / Slack / SendGrid / HTTP plugins | delivery + Discord webhook | `flows/deliver/brief.yaml` |
+| Single-pager monitor | `Flow` trigger across `lighthouse.*` | `flows/monitors/alerts.yaml` |
+| Flow unit tests | `io.kestra.core.tests.Flow` | `tests/flow_tests/` |
+| GitOps / `kestra flow validate` | CI workflow | `.github/workflows/validate-flows.yml` |
+
+## FOSS building blocks
+
+| Need | Tool | Why |
+| --- | --- | --- |
+| RSS aggregation + dedup + webhooks | [Miniflux](https://github.com/miniflux/v2) | Single Go binary, Postgres backend, native webhooks → realtime trigger source |
+| Heuristic web extraction | [Trafilatura](https://github.com/adbar/trafilatura) | Free, deterministic, no LLM cost, ~80% pages |
+| LLM-friendly extraction fallback | [Jina Reader (`r.jina.ai`)](https://github.com/jina-ai/reader) | JS-rendered, returns clean markdown |
+| Audio/video fetch | [yt-dlp](https://github.com/yt-dlp/yt-dlp) | YouTube + podcasts, single CLI |
+| Transcription | [faster-whisper](https://github.com/SYSTRAN/faster-whisper) | CTranslate2 INT8, fast on CPU |
+| Vector store | pgvector on Postgres | Same DB as Kestra; uses existing JDBC plugin |
+| Embeddings (offline option) | [sentence-transformers](https://github.com/UKPLab/sentence-transformers) | Local fallback |
+| Clustering | [BERTopic](https://github.com/MaartenGr/BERTopic) | Weekly themes |
+| On-demand deep dive | [GPT-Researcher](https://github.com/assafelovic/gpt-researcher) | Apache 2.0, runs in Docker |
+| Web search for chat | [SearxNG](https://github.com/searxng/searxng) | Self-hosted meta-search |
+| File parsing edge cases | [markitdown](https://github.com/microsoft/markitdown) | Handles formats Tika struggles with |
+
+## Repo layout
+
+```
+lighthouse/
+  flows/
+    ingest/        rss arxiv github_trending hn_reddit audio_video web_articles
+    process/       embed_dedup classify cluster_summarize
+    deliver/       brief
+    serve/         chat_brief deepdive
+    apps/          dashboard chat deepdive
+    monitors/      alerts gc
+    _namespace_files/
+      topics/      agentic-eng solana-zk indie-saas data-eng-ai
+      prompts/     system.md
+  scripts/         transcribe.py extract_trafilatura.py bertopic_cluster.py deepdive_runner.py
+  sql/             pgvector_init.sql schema.sql
+  tests/flow_tests/test_rss_dedup.yaml test_classify_schema.yaml test_brief_shape.yaml
+  infra/           docker-compose.yml Dockerfile.worker
+  blueprint/       lighthouse-research-quickstart.yaml PR_BODY.md
+  .github/workflows/validate-flows.yml
+  README.md ARCHITECTURE.md CONVENTIONS.md LOOM_SCRIPT.md SOCIAL_POST.md blogpost-draft.md LICENSE
+```
+
+## Screenshots
+
+<!-- Add after first run:
+![Dashboard](docs/img/dashboard.png)
+![Chat the brief](docs/img/chat.png)
+![Deep-dive](docs/img/deepdive.png)
+![Brief in Slack](docs/img/slack.png)
+![Brief in Notion](docs/img/notion.png)
+![Failure alert](docs/img/alert.png)
+-->
+_(Placeholders — captured during the Loom walkthrough; see [`LOOM_SCRIPT.md`](LOOM_SCRIPT.md).)_
+
+## Contributing
+
+PRs welcome — adding a topic profile is the easiest first contribution: drop a
+new file in `flows/_namespace_files/topics/<slug>.yaml`, add a Discord webhook
+secret if you want Discord delivery, and the existing flows pick it up.
+
+For larger changes, please open an issue first to align on shape.
 
 ## License
 
-See `LICENSE`.
+MIT — see [`LICENSE`](LICENSE).

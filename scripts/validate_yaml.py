@@ -7,7 +7,6 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 GLOBS = [
     ROOT / "flows",
-    ROOT / "topics",
     ROOT / "blueprint",
     ROOT / "tests",
     ROOT / "infra",

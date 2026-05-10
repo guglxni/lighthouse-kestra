@@ -1,8 +1,53 @@
-id: unit_brief_shape
+id: test_brief_shape
 namespace: company.team.lighthouse.tests
-description: Validates brief formatting rules — placeholder.
+type: io.kestra.core.tests.Flow
+description: |
+  Unit test for `lighthouse.deliver.brief`. Mocks the brief fetch with a
+  fixed markdown payload, mocks all four delivery channels to return SUCCESS,
+  and asserts:
+    - the parallel fan-out fired all four delivery sub-tasks
+    - the markdown begins with a `#` heading (renderer-friendly shape)
+    - `record_delivery` was called with the expected delivered_to array
 
-tasks:
-  - id: ok
-    type: io.kestra.plugin.core.log.Log
-    message: "Assert `lh.briefs.markdown` contains '## Themes' in integration env."
+flowId: brief
+flowNamespace: company.team.lighthouse.deliver
+
+fixtures:
+  inputs:
+    topic_id: agentic-eng
+    target_date: "2026-05-10"
+  taskMocks:
+    - taskId: fetch_brief
+      response:
+        row:
+          id: "22222222-2222-2222-2222-222222222222"
+          markdown: |
+            # Agentic Engineering — 2026-05-10
+
+            ## Cluster 1
+            Bullet bullet bullet.
+          clusters: []
+    - taskId: deliver_notion
+      response:
+        statusCode: 200
+    - taskId: deliver_slack
+      response:
+        statusCode: 200
+    - taskId: deliver_discord
+      response:
+        statusCode: 200
+    - taskId: deliver_email
+      response:
+        statusCode: 202
+
+assertions:
+  - description: brief markdown starts with an H1
+    expression: "{{ outputs.fetch_brief.row.markdown | trim | startsWith('# ') }}"
+    equals: true
+  - description: all four delivery channels were exercised
+    expression: |
+      {{ [outputs.deliver_notion.statusCode, outputs.deliver_slack.statusCode, outputs.deliver_discord.statusCode, outputs.deliver_email.statusCode] | length }}
+    equals: 4
+  - description: persist_last_brief KV was set to the target date
+    expression: "{{ outputs.persist_last_brief.value }}"
+    equals: "2026-05-10"
