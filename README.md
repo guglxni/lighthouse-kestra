@@ -195,6 +195,7 @@ lighthouse/
     serve/         chat_brief deepdive
     apps/          dashboard chat deepdive
     monitors/      alerts gc
+    maintenance/   graphify_docs (docs reminder)
     _namespace_files/
       topics/      agentic-eng solana-zk indie-saas data-eng-ai
       prompts/     system.md
