@@ -1,0 +1,29 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  @apply min-h-screen bg-ink-950 text-ink-100 antialiased;
+  background-image: radial-gradient(circle at 1px 1px, rgb(148 163 184 / 0.08) 1px, transparent 0);
+  background-size: 48px 48px;
+}
+
+:focus-visible {
+  @apply outline-none ring-2 ring-beam ring-offset-2 ring-offset-ink-950;
+}
+
+.glass-panel {
+  @apply rounded-2xl border border-white/5 bg-ink-900/70 shadow-panel backdrop-blur-xl;
+}
+
+.text-gradient {
+  @apply bg-gradient-to-r from-beam via-iris to-flare bg-clip-text text-transparent;
+}

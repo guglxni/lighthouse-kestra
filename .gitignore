@@ -27,6 +27,26 @@ htmlcov/
 docs/graphify/.staging/
 docs/graphify/output/
 
+# Next.js demo app
+demo/.next/
+demo/out/
+demo/node_modules/
+
+# IDE / editor configs (keep local)
+.cursor/
+.cursorindexingignore
+.specstory/
+
+# Generated graphify knowledge-graph output (reproducible, not source)
+graphify-out/
+scripts/graphify-out/
+
+# Monorepo experiment (node_modules included — too large)
+next-monorepo/
+
+# Local Docker Compose overrides (personal dev settings)
+infra/docker-compose.override.yml
+
 # Maintainer-only / challenge prep — keep local, not in public clone
 LOOM_SCRIPT.md
 SOCIAL_POST.md

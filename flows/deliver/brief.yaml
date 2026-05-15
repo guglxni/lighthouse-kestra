@@ -1,8 +1,10 @@
 id: brief
 namespace: company.team.lighthouse.deliver
 description: |
-  Load today's `lh.briefs` row and fan out to Discord (per-topic webhook)
-  and optional Slack incoming webhook URL.
+  Load today's `lh.briefs` row and fan out to:
+  1. Operator-level channels: Discord (per-topic webhook secrets) + Slack (env var).
+  2. Per-user channels: calls /api/notify on the demo so every subscriber's
+     configured Slack/Discord webhook receives the brief.
 
 labels:
   layer: deliver
@@ -30,13 +32,16 @@ tasks:
       DISCORD_INDIE: "{{ secret('DISCORD_WEBHOOK_INDIE') }}"
       DISCORD_DATAENG: "{{ secret('DISCORD_WEBHOOK_DATAENG') }}"
       SLACK_WEBHOOK_URL: "{{ secret('SLACK_WEBHOOK_URL') }}"
+      DEMO_NOTIFY_URL: "{{ kv('DEMO_NOTIFY_URL') }}"
+      DEMO_NOTIFY_SECRET: "{{ kv('DEMO_NOTIFY_SECRET') }}"
     script: |
       import os
-      import json
       import httpx
       import psycopg
 
       topic = os.environ["TOPIC_ID"]
+
+      # ── operator-level per-topic Discord hooks (set as Kestra secrets) ──
       hooks = {
         "agentic-eng": os.environ.get("DISCORD_AGENTIC") or "",
         "solana-zk": os.environ.get("DISCORD_SOLANA") or "",
@@ -67,6 +72,7 @@ tasks:
       md = row[0]
       text = md if len(md) < 1900 else md[:1900] + "…"
 
+      # ── 1. Operator-level channels (existing env-var webhooks) ──
       targets = []
       if discord_url:
           targets.append(("discord", discord_url))
@@ -78,14 +84,29 @@ tasks:
           if not url.startswith("https://"):
               print(f"skip {kind}: webhook must use https://")
               continue
-          if kind == "discord":
-              payload = {"content": text}
-          else:
-              payload = {"text": text}
+          payload = {"content": text} if kind == "discord" else {"text": text}
           with httpx.Client(timeout=30.0) as client:
               r = client.post(url, json=payload)
               if r.status_code >= 400:
                   print(f"delivery failed {r.status_code}: {r.text}")
+
+      # ── 2. Per-user channels: fan out via the demo /api/notify endpoint ──
+      notify_url = (os.environ.get("DEMO_NOTIFY_URL") or "").rstrip("/") + "/api/notify"
+      notify_secret = os.environ.get("DEMO_NOTIFY_SECRET") or ""
+      if notify_url and notify_secret:
+          try:
+              with httpx.Client(timeout=30.0) as client:
+                  resp = client.post(
+                      notify_url,
+                      json={"topic_id": topic, "markdown": md},
+                      headers={"Authorization": f"Bearer {notify_secret}"},
+                  )
+              print(f"notify: HTTP {resp.status_code} {resp.text[:200]}")
+          except Exception as exc:
+              # Best-effort: log but don't fail the flow.
+              print(f"notify call failed (non-fatal): {exc}")
+      else:
+          print("notify: DEMO_NOTIFY_URL or DEMO_NOTIFY_SECRET not set, skipping per-user delivery")
 
 triggers:
   - id: morning

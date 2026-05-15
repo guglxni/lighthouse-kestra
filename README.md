@@ -149,6 +149,22 @@ uv tool install graphifyy && graphify install
 
 If your globally installed `graphify` is older, the script falls back to **`uvx --from 'graphifyy>=0.7.13'`** when `uv` is available. Set `GRAPHIFY_BACKEND` (e.g. `gemini`, `claude`) and the matching API key per [Graphify’s README](https://github.com/safishamsi/graphify/blob/v7/README.md).
 
+**Groq (full repo `graphify extract`):** Graphify has no dedicated `groq` backend, but Groq’s HTTP API is OpenAI-compatible. Use the **`ollama` backend** (same OpenAI client) with Groq’s base URL and a current API key from [Groq Console](https://console.groq.com/keys). The `openai` Python package must be available (`uvx --with openai` bundles it).
+
+Graphify’s `ollama` backend sends Ollama-only fields (`keep_alive`, large `max_completion_tokens`) that Groq rejects. Use the repo helper **`scripts/graphify_extract_groq.py`**, which patches those calls for `groq.com` URLs. Many Groq models cap **`max_completion_tokens` at 8192** — set `GRAPHIFY_MAX_OUTPUT_TOKENS=8192` or extraction may return HTTP 400.
+
+```bash
+export OLLAMA_BASE_URL="https://api.groq.com/openai/v1"
+export OLLAMA_API_KEY="your_groq_key"   # starts with gsk_
+export GRAPHIFY_MAX_OUTPUT_TOKENS=8192
+uvx --with openai --from graphifyy python scripts/graphify_extract_groq.py extract . \
+  --backend ollama \
+  --model "meta-llama/llama-4-scout-17b-16e-instruct" \
+  --out .
+```
+
+Outputs appear under `./graphify-out/` (`graph.json`, `graph.html`, `GRAPH_REPORT.md`). If semantic chunks fail, confirm the key is valid (401 / `expired_api_key` means rotate the key in Groq), that `uvx` includes `--with openai`, and that output token cap matches the model.
+
 **Submodule (optional):** vendor Graphify next to this repo for skills/hooks or local patches (use on **case-sensitive** filesystems; default macOS APFS is often case-**in**sensitive and upstream may appear permanently dirty):
 
 ```bash
