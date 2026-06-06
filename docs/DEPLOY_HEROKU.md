@@ -7,7 +7,7 @@ Use **Heroku credits** for the Kestra engine and **Supabase** for Postgres + aut
 | Vercel demo | `demo-beta-topaz.vercel.app` | Free tier |
 | **Kestra** | **Heroku** (`lighthouse-kestra`) | Student credits / ~$25 Standard-1X |
 | **Postgres** | **Supabase** (`qtvlohzprhrworvhlchk`) | Free tier |
-| LiteLLM | *Not deployed* — flows call OpenAI-compatible API directly | BYOK `OPENAI_API_KEY` on Heroku |
+| LiteLLM / models | *Not on Heroku* | **BYOK** — users set keys/models in demo Settings; forwarded per Kestra execution |
 
 ## Prerequisites
 
@@ -31,10 +31,11 @@ Password: Supabase Dashboard → **Settings → Database**.
 
 ```bash
 export SUPABASE_DB_PASSWORD='...'
-export OPENAI_API_KEY='sk-...'          # or set LITELLM_BASE_URL + LITELLM_API_KEY
-export EXA_API_KEY='...'                # optional
 ./scripts/deploy-kestra-heroku.sh
 ```
+
+Do **not** set `LITELLM_*`, `OPENAI_*`, or model names on Heroku — the demo forwards BYOK on each brief run.
+Optional: set `EXA_API_KEY` on Heroku only if you want **scheduled** ingest crons to use Exa without a user in the dashboard.
 
 Creates app `lighthouse-kestra` (override with `HEROKU_APP_NAME`).
 

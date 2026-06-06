@@ -1,5 +1,6 @@
 #!/bin/sh
 # Kestra on PaaS (Heroku / Fly) — Supabase Postgres, Process script runner, dynamic PORT.
+# LLM + Exa: BYOK only — demo forwards per-execution inputs; engine secrets stay empty.
 set -eu
 
 : "${SUPABASE_DB_HOST:?SUPABASE_DB_HOST required}"
@@ -11,10 +12,6 @@ DB_PORT="${SUPABASE_DB_PORT:-5432}"
 DB_NAME="${SUPABASE_DB_NAME:-postgres}"
 DB_USER="${SUPABASE_DB_USER:-postgres}"
 KESTRA_URL="${KESTRA_PUBLIC_URL:-http://localhost:${PORT}}"
-
-# Without a LiteLLM dyno, point at OpenAI-compatible API (BYOK from env or per-execution inputs).
-LITELLM_BASE="${LITELLM_BASE_URL:-https://api.openai.com/v1}"
-LITELLM_KEY="${LITELLM_API_KEY:-${OPENAI_API_KEY:-}}"
 
 export KESTRA_CONFIGURATION="datasources:
   postgres:
@@ -47,10 +44,11 @@ export SECRET_POSTGRES_PORT="${DB_PORT}"
 export SECRET_POSTGRES_DB="${DB_NAME}"
 export SECRET_POSTGRES_USER="${DB_USER}"
 export SECRET_POSTGRES_PASSWORD="${SUPABASE_DB_PASSWORD}"
-export SECRET_LITELLM_BASE_URL="${LITELLM_BASE}"
-export SECRET_LITELLM_API_KEY="${LITELLM_KEY}"
-export SECRET_LITELLM_MODEL_PRIMARY="${LITELLM_MODEL_PRIMARY:-gpt-4o}"
-export SECRET_LITELLM_MODEL_FALLBACK="${LITELLM_MODEL_FALLBACK:-gpt-4o-mini}"
+# Empty unless operator opts in for unattended cron (BYOK default = per-execution inputs).
+export SECRET_LITELLM_BASE_URL="${LITELLM_BASE_URL:-}"
+export SECRET_LITELLM_API_KEY="${LITELLM_API_KEY:-}"
+export SECRET_LITELLM_MODEL_PRIMARY="${LITELLM_MODEL_PRIMARY:-}"
+export SECRET_LITELLM_MODEL_FALLBACK="${LITELLM_MODEL_FALLBACK:-}"
 export SECRET_EXA_API_KEY="${EXA_API_KEY:-}"
 export SECRET_EXA_API_BASE="${EXA_API_BASE:-https://api.exa.ai}"
 export SECRET_DEMO_NOTIFY_URL="${DEMO_NOTIFY_URL:-https://demo-beta-topaz.vercel.app}"

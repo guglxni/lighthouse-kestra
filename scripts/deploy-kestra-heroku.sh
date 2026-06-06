@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Deploy Kestra to Heroku (Container stack) + Supabase Postgres.
+# LLM + Exa credentials are BYOK — forwarded from the Vercel demo per execution, not set here.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -24,8 +25,7 @@ else
   heroku stack:set container -a "$APP" 2>/dev/null || true
 fi
 
-# Standard-1X minimum for Kestra JVM + Python scripts (~$25/mo; student credits apply).
-echo "==> Dyno type (use basic if credits are tight — may OOM on heavy flows)"
+echo "==> Dyno type"
 heroku ps:type standard-1x -a "$APP" 2>/dev/null || heroku ps:type basic -a "$APP" || true
 
 if [[ -z "${SUPABASE_DB_PASSWORD:-}" ]]; then
@@ -35,14 +35,10 @@ fi
 
 if [[ -z "${DEMO_NOTIFY_SECRET:-}" ]]; then
   DEMO_NOTIFY_SECRET="$(openssl rand -hex 32)"
-  echo "Generated DEMO_NOTIFY_SECRET=$DEMO_NOTIFY_SECRET"
+  echo "Generated DEMO_NOTIFY_SECRET (also set NOTIFY_SECRET on Vercel)"
 fi
 
-if [[ -z "${OPENAI_API_KEY:-}" ]]; then
-  read -rsp "OPENAI_API_KEY (or set LITELLM_* for another provider): " OPENAI_API_KEY
-  echo
-fi
-
+# Engine infra only — no LITELLM_*, OPENAI_*, EXA_*, or model names (BYOK from dashboard).
 heroku config:set -a "$APP" \
   SUPABASE_DB_HOST="$SUPABASE_HOST" \
   SUPABASE_DB_PASSWORD="$SUPABASE_DB_PASSWORD" \
@@ -51,13 +47,12 @@ heroku config:set -a "$APP" \
   SUPABASE_DB_USER="postgres" \
   DEMO_NOTIFY_URL="$DEMO_URL" \
   DEMO_NOTIFY_SECRET="$DEMO_NOTIFY_SECRET" \
-  LITELLM_BASE_URL="${LITELLM_BASE_URL:-https://api.openai.com/v1}" \
-  LITELLM_API_KEY="${LITELLM_API_KEY:-$OPENAI_API_KEY}" \
-  LITELLM_MODEL_PRIMARY="${LITELLM_MODEL_PRIMARY:-gpt-4o}" \
-  LITELLM_MODEL_FALLBACK="${LITELLM_MODEL_FALLBACK:-gpt-4o-mini}" \
-  OPENAI_API_KEY="${OPENAI_API_KEY:-}" \
-  EXA_API_KEY="${EXA_API_KEY:-}" \
   KESTRA_WORKER_THREADS="2"
+
+# Remove any previously hardcoded provider keys/models from an earlier deploy.
+heroku config:unset -a "$APP" \
+  LITELLM_BASE_URL LITELLM_API_KEY LITELLM_MODEL_PRIMARY LITELLM_MODEL_FALLBACK \
+  OPENAI_API_KEY EXA_API_KEY 2>/dev/null || true
 
 echo "==> Deploying container (heroku.yml → infra/Dockerfile.kestra-heroku)"
 heroku container:login
@@ -71,12 +66,12 @@ echo ""
 echo "✓ Kestra: $KESTRA_URL"
 echo "✓ UI:     $KESTRA_URL/ui"
 echo ""
+echo "BYOK: Users configure LLM + Exa in the demo Settings UI. Each brief execution"
+echo "      forwards keys/models to Kestra flow inputs — nothing stored on Heroku."
+echo ""
 echo "── Wire Vercel demo ──"
 echo "cd demo"
 echo "vercel env add KESTRA_PUBLIC_URL production   # $KESTRA_URL"
-echo "vercel env add NOTIFY_SECRET production       # $DEMO_NOTIFY_SECRET"
+echo "vercel env add NOTIFY_SECRET production       # (same as DEMO_NOTIFY_SECRET above)"
 echo "vercel env add DATABASE_URL production        # postgresql://postgres:<pw>@$SUPABASE_HOST:5432/postgres?sslmode=require"
 echo "vercel --prod"
-echo ""
-echo "── Push Supabase lh schema (if not done) ──"
-echo "./scripts/deploy-supabase-backend.sh"
