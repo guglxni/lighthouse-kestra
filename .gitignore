@@ -47,7 +47,8 @@ next-monorepo/
 # Local Docker Compose overrides (personal dev settings)
 infra/docker-compose.override.yml
 
-# Maintainer-only / challenge prep — keep local, not in public clone
+# Maintainer-only drafts — keep local, not in public clone
 LOOM_SCRIPT.md
 SOCIAL_POST.md
 blogpost-draft.md
+kestra-article.md
