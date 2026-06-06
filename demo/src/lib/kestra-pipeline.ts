@@ -46,6 +46,84 @@ function llmInputs(byok?: KestraByokInputs): Record<string, string> {
   return out;
 }
 
+function stageSpec(args: {
+  stage: KestraStage;
+  topicId: string;
+  prompt: string;
+  topicContext?: string;
+  byok?: KestraByokInputs;
+  useMultiLlm?: boolean;
+}): { spec: (typeof KESTRA_FLOWS)[keyof typeof KESTRA_FLOWS]; inputs: Record<string, unknown> } {
+  if (args.stage === "exa") {
+    const query = `${args.topicId.replace(/-/g, " ")} — ${args.prompt}`;
+    return {
+      spec: KESTRA_FLOWS.exa,
+      inputs: {
+        topic_id: args.topicId,
+        query,
+        ...(args.byok?.exaApiKey?.trim() ? { exa_api_key: args.byok.exaApiKey.trim() } : {}),
+      },
+    };
+  }
+  if (args.stage === "classify") {
+    return {
+      spec: KESTRA_FLOWS.classify,
+      inputs: {
+        topic_id: args.topicId,
+        limit: 30,
+        use_multi_llm: args.useMultiLlm ?? false,
+        ...llmInputs(args.byok),
+      },
+    };
+  }
+  return {
+    spec: KESTRA_FLOWS.summarize,
+    inputs: {
+      topic_id: args.topicId,
+      use_multi_llm: args.useMultiLlm ?? Boolean(args.byok?.modelFallback?.trim()),
+      user_prompt: args.prompt,
+      topic_context: args.topicContext ?? `Topic id: ${args.topicId}`,
+      ...llmInputs(args.byok),
+    },
+  };
+}
+
+export async function startKestraStage(args: {
+  stage: KestraStage;
+  topicId: string;
+  prompt: string;
+  topicContext?: string;
+  byok?: KestraByokInputs;
+  useMultiLlm?: boolean;
+}): Promise<{ executionId: string }> {
+  requireKestra();
+  const { spec, inputs } = stageSpec(args);
+  const created = await createExecution(spec.namespace, spec.flowId, inputs);
+  return { executionId: created.id };
+}
+
+export async function pollKestraStageExecution(
+  executionId: string,
+  startedAt = Date.now(),
+): Promise<{ executionId: string; state: string; elapsedMs: number; markdown?: string; done: boolean }> {
+  const ex = await getExecution(executionId);
+  const state = ex.state?.current ?? "UNKNOWN";
+  const terminal = new Set(["SUCCESS", "FAILED", "KILLED", "CANCELLED", "WARNING"]);
+  if (!terminal.has(state)) {
+    return { executionId, state, elapsedMs: Date.now() - startedAt, done: false };
+  }
+  if (state === "FAILED" || state === "KILLED" || state === "CANCELLED") {
+    throw new Error(`Kestra execution ${executionId} ended with ${state}`);
+  }
+  return {
+    executionId,
+    state,
+    elapsedMs: Date.now() - startedAt,
+    markdown: extractBriefMarkdown(ex),
+    done: true,
+  };
+}
+
 export async function runKestraStage(args: {
   stage: KestraStage;
   topicId: string;
@@ -54,43 +132,12 @@ export async function runKestraStage(args: {
   byok?: KestraByokInputs;
   useMultiLlm?: boolean;
 }): Promise<{ executionId: string; state: string; elapsedMs: number; markdown?: string }> {
-  requireKestra();
   const t0 = Date.now();
-  let spec: (typeof KESTRA_FLOWS)[keyof typeof KESTRA_FLOWS];
-  let inputs: Record<string, unknown>;
-
-  if (args.stage === "exa") {
-    spec = KESTRA_FLOWS.exa;
-    const query = `${args.topicId.replace(/-/g, " ")} — ${args.prompt}`;
-    inputs = {
-      topic_id: args.topicId,
-      query,
-      ...(args.byok?.exaApiKey?.trim() ? { exa_api_key: args.byok.exaApiKey.trim() } : {}),
-    };
-  } else if (args.stage === "classify") {
-    spec = KESTRA_FLOWS.classify;
-    inputs = {
-      topic_id: args.topicId,
-      limit: 30,
-      use_multi_llm: args.useMultiLlm ?? false,
-      ...llmInputs(args.byok),
-    };
-  } else {
-    spec = KESTRA_FLOWS.summarize;
-    inputs = {
-      topic_id: args.topicId,
-      use_multi_llm: args.useMultiLlm ?? Boolean(args.byok?.modelFallback?.trim()),
-      user_prompt: args.prompt,
-      topic_context: args.topicContext ?? `Topic id: ${args.topicId}`,
-      ...llmInputs(args.byok),
-    };
-  }
-
-  const created = await createExecution(spec.namespace, spec.flowId, inputs);
-  const done = await waitForExecution(created.id, { timeoutMs: 600_000, pollMs: 2000 });
+  const created = await startKestraStage(args);
+  const done = await waitForExecution(created.executionId, { timeoutMs: 600_000, pollMs: 2000 });
   const markdown = extractBriefMarkdown(done);
   return {
-    executionId: created.id,
+    executionId: created.executionId,
     state: done.state?.current ?? "UNKNOWN",
     elapsedMs: Date.now() - t0,
     markdown,
@@ -161,7 +208,7 @@ export async function runKestraBriefPipeline(args: {
   };
 }
 
-function extractBriefMarkdown(execution: KestraExecution): string | undefined {
+export function extractBriefMarkdown(execution: KestraExecution): string | undefined {
   const flowOut = execution.outputs as Record<string, unknown> | undefined;
   if (typeof flowOut?.markdown === "string" && flowOut.markdown.trim()) {
     return flowOut.markdown;

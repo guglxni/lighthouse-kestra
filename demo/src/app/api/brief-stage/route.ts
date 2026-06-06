@@ -2,11 +2,16 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { isValidByok } from "@/lib/llm-forward";
 import { kestraConfigured } from "@/lib/kestra-client";
-import { runKestraStage, type KestraByokInputs, type KestraStage } from "@/lib/kestra-pipeline";
+import {
+  pollKestraStageExecution,
+  startKestraStage,
+  type KestraByokInputs,
+  type KestraStage,
+} from "@/lib/kestra-pipeline";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 300;
+export const maxDuration = 60;
 
 /** UI stage → existing Kestra flow (ingest.exa_search → process.classify → process.cluster_summarize). */
 const STAGE_MAP: Record<string, KestraStage> = {
@@ -16,6 +21,9 @@ const STAGE_MAP: Record<string, KestraStage> = {
 };
 
 type Payload = {
+  action?: "start" | "poll";
+  executionId?: string;
+  startedAt?: number;
   stage: "exa" | "draft" | "polish";
   topicId: string;
   prompt: string;
@@ -39,6 +47,45 @@ function toKestraByok(body: Payload): KestraByokInputs {
   };
 }
 
+function stageResponse(
+  stage: Payload["stage"],
+  byok: Payload["byok"],
+  result: { executionId: string; state: string; elapsedMs: number; markdown?: string },
+) {
+  if (stage === "exa") {
+    return {
+      stage,
+      research: { hits: [], mode: "kestra" as const },
+      elapsedMs: result.elapsedMs,
+      detail: `ingest.exa_search (${result.state})`,
+      executionId: result.executionId,
+    };
+  }
+  if (stage === "draft") {
+    return {
+      stage,
+      draft: "(classified via Kestra)",
+      model: byok.llmModelPrimary,
+      elapsedMs: result.elapsedMs,
+      detail: `process.classify (${result.state})`,
+      executionId: result.executionId,
+    };
+  }
+  const output = result.markdown ?? "";
+  if (!output.trim()) {
+    throw new Error("Kestra cluster_summarize returned no markdown.");
+  }
+  return {
+    stage,
+    output,
+    model: byok.llmModelQuality?.trim() || byok.llmModelPrimary,
+    skipped: !byok.llmModelQuality?.trim(),
+    elapsedMs: result.elapsedMs,
+    detail: `process.cluster_summarize (${result.state})`,
+    executionId: result.executionId,
+  };
+}
+
 export async function POST(req: NextRequest) {
   if (!kestraConfigured()) {
     return NextResponse.json(
@@ -57,7 +104,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { stage, topicId, prompt, byok, exaApiKey, topicContext } = body ?? {};
+  const { stage, topicId, prompt, byok, exaApiKey, topicContext, action = "start", executionId, startedAt } = body ?? {};
   const kestraStage = STAGE_MAP[stage];
   if (!kestraStage || !topicId || !prompt) {
     return NextResponse.json({ error: "Missing stage, topicId, or prompt." }, { status: 400 });
@@ -72,6 +119,26 @@ export async function POST(req: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Sign in first." }, { status: 401 });
+
+  if (action === "poll") {
+    if (!executionId) return NextResponse.json({ error: "executionId required for poll." }, { status: 400 });
+    try {
+      const polled = await pollKestraStageExecution(executionId, startedAt ?? Date.now());
+      if (!polled.done) {
+        return NextResponse.json({
+          stage,
+          status: "running",
+          executionId,
+          state: polled.state,
+          startedAt: startedAt ?? Date.now(),
+        });
+      }
+      return NextResponse.json(stageResponse(stage, byok, polled));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return NextResponse.json({ error: msg, stage }, { status: 502 });
+    }
+  }
 
   let resolvedTopicContext = topicContext;
   if (!resolvedTopicContext) {
@@ -103,7 +170,8 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    const result = await runKestraStage({
+    const t0 = Date.now();
+    const created = await startKestraStage({
       stage: kestraStage,
       topicId,
       prompt,
@@ -112,44 +180,15 @@ export async function POST(req: NextRequest) {
       useMultiLlm: Boolean(byok?.llmModelQuality?.trim()),
     });
 
-    if (stage === "exa") {
-      return NextResponse.json({
-        stage,
-        research: { hits: [], mode: "kestra" as const },
-        elapsedMs: result.elapsedMs,
-        detail: `ingest.exa_search (${result.state})`,
-        executionId: result.executionId,
-      });
-    }
-
-    if (stage === "draft") {
-      return NextResponse.json({
-        stage,
-        draft: "(classified via Kestra)",
-        model: byok.llmModelPrimary,
-        elapsedMs: result.elapsedMs,
-        detail: `process.classify (${result.state})`,
-        executionId: result.executionId,
-      });
-    }
-
-    const output = result.markdown ?? "";
-    if (!output.trim()) {
-      return NextResponse.json({ error: "Kestra cluster_summarize returned no markdown." }, { status: 502 });
-    }
-
     return NextResponse.json({
       stage,
-      output,
-      model: byok.llmModelQuality?.trim() || byok.llmModelPrimary,
-      skipped: !byok.llmModelQuality?.trim(),
-      elapsedMs: result.elapsedMs,
-      detail: `process.cluster_summarize (${result.state})`,
-      executionId: result.executionId,
+      status: "running",
+      executionId: created.executionId,
+      startedAt: t0,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    console.error(`brief-stage:${stage} kestra fail topic=${topicId} err=${msg.slice(0, 200)}`);
+    console.error(`brief-stage:${stage} kestra start fail topic=${topicId} err=${msg.slice(0, 200)}`);
     return NextResponse.json({ error: msg, stage }, { status: 502 });
   }
 }

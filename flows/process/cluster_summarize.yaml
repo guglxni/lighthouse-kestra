@@ -174,22 +174,6 @@ outputs:
     type: STRING
     value: "{{ read(outputs.summarize_and_persist.outputFiles['brief.md']) }}"
 
-  - id: reference_chatcompletion
-    type: io.kestra.plugin.ai.completion.ChatCompletion
-    description: |
-      Declarative reference — same provider wiring as scripts (LiteLLM):
-      `type: io.kestra.plugin.ai.provider.OpenAI` + `baseUrl` + `modelName`.
-    runIf: "false"
-    allowFailure: true
-    provider:
-      type: io.kestra.plugin.ai.provider.OpenAI
-      apiKey: "{{ secret('LITELLM_API_KEY') }}"
-      baseUrl: "{{ secret('LITELLM_BASE_URL') }}"
-      modelName: "{{ secret('LITELLM_MODEL_PRIMARY') }}"
-    messages:
-      - type: USER
-        content: "Reference only."
-
 triggers:
   - id: cluster_agentic_eng
     type: io.kestra.plugin.core.trigger.Schedule

@@ -20,8 +20,13 @@ function kestraBase(): string {
   return (process.env.KESTRA_PUBLIC_URL ?? "").replace(/\/$/, "");
 }
 
-function tenant(): string {
-  return process.env.KESTRA_TENANT?.trim() || "main";
+/** OSS default: no tenant segment (/api/v1/flows). Enterprise multi-tenant: set KESTRA_TENANT=main */
+function apiV1(path: string): string {
+  const base = kestraBase();
+  if (!base) throw new Error("KESTRA_PUBLIC_URL not set");
+  const suffix = path.startsWith("/") ? path : `/${path}`;
+  const t = process.env.KESTRA_TENANT?.trim();
+  return t ? `${base}/api/v1/${t}${suffix}` : `${base}/api/v1${suffix}`;
 }
 
 function authHeaders(): HeadersInit {
@@ -49,7 +54,7 @@ export async function createExecution(
   if (!base) throw new Error("KESTRA_PUBLIC_URL not set");
   const ns = encodeURIComponent(namespace);
   const flow = encodeURIComponent(flowId);
-  const res = await fetch(`${base}/api/v1/${tenant()}/executions/${ns}/${flow}`, {
+  const res = await fetch(apiV1(`/executions/${ns}/${flow}`), {
     method: "POST",
     headers: { ...authHeaders(), "Content-Type": "application/json" },
     body: JSON.stringify(inputs),
@@ -67,7 +72,7 @@ export async function createExecution(
 export async function getExecution(executionId: string): Promise<KestraExecution> {
   const base = kestraBase();
   if (!base) throw new Error("KESTRA_PUBLIC_URL not set");
-  const res = await fetch(`${base}/api/v1/${tenant()}/executions/${encodeURIComponent(executionId)}`, {
+  const res = await fetch(apiV1(`/executions/${encodeURIComponent(executionId)}`), {
     headers: authHeaders(),
     cache: "no-store",
     signal: AbortSignal.timeout(15_000),
@@ -107,7 +112,7 @@ export async function kestraPing(): Promise<{ ok: boolean; ms: number; error?: s
   if (!base) return { ok: false, ms: 0, error: "KESTRA_PUBLIC_URL not set" };
   const start = Date.now();
   try {
-    const res = await fetch(`${base}/api/v1/${tenant()}/flows/search?size=1`, {
+    const res = await fetch(apiV1("/flows/search?size=1"), {
       headers: authHeaders(),
       cache: "no-store",
       signal: AbortSignal.timeout(8000),
@@ -125,7 +130,7 @@ export async function uploadTopicYaml(topicId: string, yamlContent: string): Pro
   const ns = encodeURIComponent("company.team.lighthouse");
   const path = encodeURIComponent(`_files/topics/${topicId}.yaml`);
   try {
-    const res = await fetch(`${base}/api/v1/${tenant}/namespaces/${ns}/files?path=${path}`, {
+    const res = await fetch(apiV1(`/namespaces/${ns}/files?path=${path}`), {
       method: "PUT",
       headers: { ...authHeaders(), "Content-Type": "application/x-yaml" },
       body: yamlContent,

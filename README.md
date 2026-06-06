@@ -38,10 +38,6 @@ Four topic profiles ship preconfigured:
 - `indie-saas` — Bootstrapped SaaS, distribution, growth case studies
 - `data-eng-ai` — Lakehouse, orchestration, vector DBs, RAG infra
 
-## WeMakeDevs × Kestra orchestration challenge
-
-If you are taking part in **[The Kestra Orchestration Challenge](https://www.wemakedevs.org/orchestration)** (May 4–17, 2026): register, complete **Kestra Fundamentals** on [Kestra Academy](https://academy.kestra.io), get certified, then post with **`#KestraAcademy`**. Lighthouse is a project you can showcase *after* certification — it is not a substitute for those steps.
-
 ---
 
 ## Quickstart

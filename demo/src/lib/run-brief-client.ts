@@ -26,14 +26,44 @@ type ByokPayload = {
 };
 
 async function postStage(body: Record<string, unknown>) {
-  const res = await fetch("/api/brief-stage", {
+  const startRes = await fetch("/api/brief-stage", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ ...body, action: "start" }),
   });
-  const j = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((j as { error?: string }).error ?? `Stage failed (HTTP ${res.status})`);
-  return j as Record<string, unknown>;
+  const start = (await startRes.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!startRes.ok) {
+    throw new Error((start.error as string) ?? `Stage failed (HTTP ${startRes.status})`);
+  }
+  if (start.skipped) return start;
+  if (start.status !== "running" || !start.executionId) return start;
+
+  const executionId = start.executionId as string;
+  const startedAt = (start.startedAt as number) ?? Date.now();
+  const deadline = Date.now() + 600_000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 2500));
+    const pollRes = await fetch("/api/brief-stage", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...body,
+        action: "poll",
+        executionId,
+        startedAt,
+        stage: body.stage,
+        topicId: body.topicId,
+        prompt: body.prompt,
+        byok: body.byok,
+      }),
+    });
+    const polled = (await pollRes.json().catch(() => ({}))) as Record<string, unknown>;
+    if (!pollRes.ok) {
+      throw new Error((polled.error as string) ?? `Stage failed (HTTP ${pollRes.status})`);
+    }
+    if (polled.status !== "running") return polled;
+  }
+  throw new Error("Kestra stage timed out after 10 minutes");
 }
 
 export async function runBriefPipeline(args: {

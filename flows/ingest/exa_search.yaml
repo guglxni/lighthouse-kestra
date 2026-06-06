@@ -95,7 +95,9 @@ tasks:
   - id: insert_documents
     type: io.kestra.plugin.jdbc.postgresql.Queries
     runIf: "{{ read(outputs.fetch_and_parse.outputFiles['documents.json']) != '[]' }}"
-    sqlType: PREPARED
+    url: "jdbc:postgresql://{{ secret('POSTGRES_HOST') }}:{{ secret('POSTGRES_PORT') }}/{{ secret('POSTGRES_DB') }}"
+    username: "{{ secret('POSTGRES_USER') }}"
+    password: "{{ secret('POSTGRES_PASSWORD') }}"
     sql: |
       INSERT INTO lh.documents (topic_id, source, source_id, url, title, author, published_at, raw_text, language, metadata)
       SELECT

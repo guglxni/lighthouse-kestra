@@ -226,7 +226,6 @@ tasks:
 
   - id: insert_documents
     type: io.kestra.plugin.jdbc.postgresql.Queries
-    sqlType: PREPARED
     sql: |
       INSERT INTO lh.documents (topic_id, source, source_id, url, title, author, published_at, raw_text, language, metadata)
       SELECT

@@ -85,9 +85,14 @@ async function timedFetch(url: string, init?: RequestInit): Promise<Response> {
   }
 }
 
+function kestraApiBase(kestraBase: string, tenant: string): string {
+  const t = tenant.trim();
+  return t ? `${kestraBase}/api/v1/${t}` : `${kestraBase}/api/v1`;
+}
+
 async function fetchFlowsForNamespace(kestraBase: string, tenant: string, ns: string) {
   const encoded = encodeURIComponent(ns);
-  const url = `${kestraBase}/api/v1/${tenant}/flows/${encoded}`;
+  const url = `${kestraApiBase(kestraBase, tenant)}/flows/${encoded}`;
   const res = await timedFetch(url, { headers: kestraAuthHeaders() });
   if (!res.ok) return { ok: false as const, status: res.status };
   const data = (await res.json()) as unknown;
@@ -100,7 +105,7 @@ async function fetchFlowsForNamespace(kestraBase: string, tenant: string, ns: st
 }
 
 async function fetchExecutionSample(kestraBase: string, tenant: string) {
-  const url = `${kestraBase}/api/v1/${tenant}/executions?page=1&size=25`;
+  const url = `${kestraApiBase(kestraBase, tenant)}/executions?page=1&size=25`;
   const res = await timedFetch(url, { headers: kestraAuthHeaders() });
   if (!res.ok) return { ok: false as const, status: res.status };
   type ExRow = {
@@ -258,7 +263,7 @@ export async function loadDashboardPayload(): Promise<DashboardPayload> {
   // Empty default: skip Kestra probing when not explicitly configured (avoids
   // 8s per-request hangs on Vercel where localhost:8080 is unreachable).
   const kestraUrl = env("KESTRA_PUBLIC_URL", "").replace(/\/$/, "");
-  const tenant = env("KESTRA_TENANT", "main");
+  const tenant = env("KESTRA_TENANT", "");
   const litellmUrl = env("LITELLM_BASE_URL", "http://127.0.0.1:4000/v1").replace(/\/$/, "");
   const litellmKey = env("LITELLM_API_KEY", "");
   const databaseUrl = env("DATABASE_URL");

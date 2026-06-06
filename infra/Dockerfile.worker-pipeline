@@ -1,0 +1,4 @@
+# Minimal worker for Kestra brief pipeline scripts (classify, cluster_summarize, exa_search).
+FROM python:3.11-slim-bookworm
+RUN pip install --no-cache-dir httpx "psycopg[binary]" pyyaml
+WORKDIR /app

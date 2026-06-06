@@ -66,4 +66,4 @@ blocks:
     type: io.kestra.plugin.ee.apps.blocks.Markdown
     content: |
       ---
-      Built with Kestra. Source: github.com/aaryanguglani/lighthouse · #KestraAcademy
+      Built with Kestra. Source: github.com/aaryanguglani/lighthouse

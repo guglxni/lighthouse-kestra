@@ -59,7 +59,7 @@ psql -c "CREATE EXTENSION IF NOT EXISTS vector;"
 
 ## Author
 
-Built as part of the #KestraAcademy contest entry. Repo:
+Repo:
 `github.com/aaryanguglani/lighthouse`. Blog post:
 `lighthouse-orchestrating-research-with-kestra.md` in the same repo.
 
