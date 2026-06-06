@@ -56,7 +56,8 @@ export SECRET_DEMO_NOTIFY_SECRET="${DEMO_NOTIFY_SECRET:-}"
 export SECRET_KESTRA_PUBLIC_URL="${KESTRA_URL}"
 
 THREADS="${KESTRA_WORKER_THREADS:-2}"
-if [ -x /docker-entrypoint.sh ]; then
-  exec /docker-entrypoint.sh server standalone --worker-thread="${THREADS}"
+KESTRA_BIN="/usr/local/bin/docker-entrypoint.sh"
+if [ ! -x "${KESTRA_BIN}" ]; then
+  KESTRA_BIN="/app/kestra"
 fi
-exec server standalone --worker-thread="${THREADS}"
+exec "${KESTRA_BIN}" server standalone --worker-thread="${THREADS}"
