@@ -6,7 +6,9 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 APP="${HEROKU_APP_NAME:-lighthouse-kestra}"
-SUPABASE_HOST="${SUPABASE_DB_HOST:-db.qtvlohzprhrworvhlchk.supabase.co}"
+# Heroku is IPv4-only — use Supabase session pooler (not direct db.* host).
+SUPABASE_HOST="${SUPABASE_DB_HOST:-aws-1-ap-southeast-2.pooler.supabase.com}"
+SUPABASE_USER="${SUPABASE_DB_USER:-postgres.qtvlohzprhrworvhlchk}"
 DEMO_URL="${DEMO_NOTIFY_URL:-https://demo-beta-topaz.vercel.app}"
 
 if ! command -v heroku >/dev/null 2>&1; then

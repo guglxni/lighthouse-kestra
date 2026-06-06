@@ -19,6 +19,11 @@ export KESTRA_CONFIGURATION="datasources:
     driverClassName: org.postgresql.Driver
     username: ${DB_USER}
     password: ${SUPABASE_DB_PASSWORD}
+flyway:
+  datasources:
+    postgres:
+      baseline-on-migrate: true
+      baseline-version: 0
 kestra:
   server:
     basic-auth:
