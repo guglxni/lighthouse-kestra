@@ -54,10 +54,8 @@ heroku config:unset -a "$APP" \
   LITELLM_BASE_URL LITELLM_API_KEY LITELLM_MODEL_PRIMARY LITELLM_MODEL_FALLBACK \
   OPENAI_API_KEY EXA_API_KEY 2>/dev/null || true
 
-echo "==> Deploying container (heroku.yml → infra/Dockerfile.kestra-heroku)"
-heroku container:login
-heroku container:push web -a "$APP"
-heroku container:release web -a "$APP"
+echo "==> Deploying container (heroku.yml → Dockerfile.heroku)"
+git push heroku HEAD:main
 
 KESTRA_URL="https://${APP}.herokuapp.com"
 heroku config:set -a "$APP" KESTRA_PUBLIC_URL="$KESTRA_URL"
