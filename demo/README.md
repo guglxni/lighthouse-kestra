@@ -79,6 +79,8 @@ When you click **Run a sample brief**, the browser POSTs `{ topicId, prompt, byo
 
 This is a Next.js app with server routes; it needs a Node host (Vercel, Fly, Railway, Heroku). GitHub Pages is static-only and won’t run `/api/*`. If you do want a static landing page on Pages, host the demo backend on Vercel and link out — keep AI keys out of the static page.
 
+**Public preview:** [https://demo-beta-topaz.vercel.app](https://demo-beta-topaz.vercel.app)
+
 ## JSON feed
 
 `GET /api/dashboard` returns the same payload that powers the page — useful for CI smoke checks.

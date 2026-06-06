@@ -104,14 +104,34 @@ tasks:
     message: "embed_dedup finished topic={{ inputs.topic_id }}"
 
 triggers:
-  - id: schedule
+  - id: schedule_agentic_eng
     type: io.kestra.plugin.core.trigger.Schedule
     cron: "*/30 * * * *"
     inputs:
       topic_id: agentic-eng
 
+  - id: schedule_solana_zk
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "*/30 * * * *"
+    inputs:
+      topic_id: solana-zk
+
+  - id: schedule_indie_saas
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "*/30 * * * *"
+    inputs:
+      topic_id: indie-saas
+
+  - id: schedule_data_eng_ai
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "*/30 * * * *"
+    inputs:
+      topic_id: data-eng-ai
+
   - id: after_rss
     type: io.kestra.plugin.core.trigger.Flow
+    inputs:
+      topic_id: "{{ trigger.execution.inputs.topic_id }}"
     conditions:
       - type: io.kestra.plugin.core.condition.ExecutionFlow
         namespace: company.team.lighthouse.ingest
@@ -124,6 +144,8 @@ triggers:
 
   - id: after_arxiv
     type: io.kestra.plugin.core.trigger.Flow
+    inputs:
+      topic_id: "{{ trigger.execution.inputs.topic_id }}"
     conditions:
       - type: io.kestra.plugin.core.condition.ExecutionFlow
         namespace: company.team.lighthouse.ingest
@@ -136,6 +158,8 @@ triggers:
 
   - id: after_github
     type: io.kestra.plugin.core.trigger.Flow
+    inputs:
+      topic_id: "{{ trigger.execution.inputs.topic_id }}"
     conditions:
       - type: io.kestra.plugin.core.condition.ExecutionFlow
         namespace: company.team.lighthouse.ingest
@@ -148,6 +172,8 @@ triggers:
 
   - id: after_hn
     type: io.kestra.plugin.core.trigger.Flow
+    inputs:
+      topic_id: "{{ trigger.execution.inputs.topic_id }}"
     conditions:
       - type: io.kestra.plugin.core.condition.ExecutionFlow
         namespace: company.team.lighthouse.ingest
@@ -160,6 +186,8 @@ triggers:
 
   - id: after_av
     type: io.kestra.plugin.core.trigger.Flow
+    inputs:
+      topic_id: "{{ trigger.execution.inputs.topic_id }}"
     conditions:
       - type: io.kestra.plugin.core.condition.ExecutionFlow
         namespace: company.team.lighthouse.ingest
@@ -172,10 +200,26 @@ triggers:
 
   - id: after_web
     type: io.kestra.plugin.core.trigger.Flow
+    inputs:
+      topic_id: "{{ trigger.execution.inputs.topic_id }}"
     conditions:
       - type: io.kestra.plugin.core.condition.ExecutionFlow
         namespace: company.team.lighthouse.ingest
         flowId: web_articles
+      - type: io.kestra.plugin.core.condition.ExecutionStatus
+        in:
+          - SUCCESS
+    states:
+      - SUCCESS
+
+  - id: after_exa
+    type: io.kestra.plugin.core.trigger.Flow
+    inputs:
+      topic_id: "{{ trigger.execution.inputs.topic_id }}"
+    conditions:
+      - type: io.kestra.plugin.core.condition.ExecutionFlow
+        namespace: company.team.lighthouse.ingest
+        flowId: exa_search
       - type: io.kestra.plugin.core.condition.ExecutionStatus
         in:
           - SUCCESS

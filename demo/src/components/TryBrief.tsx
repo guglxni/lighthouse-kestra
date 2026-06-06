@@ -3,7 +3,9 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import { BriefPipelineProgress } from "@/components/BriefPipelineProgress";
 import { hasMinimumByok, readByok } from "@/lib/byok-store";
+import { runBriefPipeline, type BriefProgressStep } from "@/lib/run-brief-client";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 type Topic = { id: string; name: string };
@@ -18,27 +20,54 @@ type BriefRecord = {
 
 export function TryBrief({
   topics,
-  defaultTopicId,
+  topicId: controlledTopicId,
+  onTopicChange,
   signedIn,
 }: {
   topics: Topic[];
-  defaultTopicId?: string;
+  topicId: string;
+  onTopicChange: (id: string) => void;
   signedIn: boolean;
 }) {
   const [byokReady, setByokReady] = useState(false);
-  const [topicId, setTopicId] = useState(defaultTopicId ?? topics[0]?.id ?? "agentic-eng");
+  const topicId = controlledTopicId;
   const [prompt, setPrompt] = useState("What broke and what shipped in the last 24 hours?");
+  const [activePrompt, setActivePrompt] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [elapsedSec, setElapsedSec] = useState(0);
   const [output, setOutput] = useState<string>("");
-  const [meta, setMeta] = useState<{ model?: string; elapsedMs?: number } | null>(null);
+  const [meta, setMeta] = useState<{
+    model?: string;
+    elapsedMs?: number;
+    exa?: { used: boolean; hits: number; mode?: string; error?: string };
+    pipeline?: { stages: string[]; models: { draft: string; polish?: string } };
+    delivery?: {
+      delivered: number;
+      failed: number;
+      pending?: boolean;
+      channels: Array<{ channel: string; ok: boolean; error?: string }>;
+    };
+  } | null>(null);
+  const [pipelineSteps, setPipelineSteps] = useState<BriefProgressStep[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<BriefRecord[]>([]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const outputRef = useRef<HTMLElement | null>(null);
   const channelRef = useRef<ReturnType<ReturnType<typeof createSupabaseBrowserClient>["channel"]> | null>(null);
 
   useEffect(() => {
     setByokReady(hasMinimumByok(readByok()));
   }, []);
+
+  useEffect(() => {
+    if (!busy) {
+      setElapsedSec(0);
+      return;
+    }
+    const t0 = Date.now();
+    const id = window.setInterval(() => setElapsedSec(Math.floor((Date.now() - t0) / 1000)), 1000);
+    return () => window.clearInterval(id);
+  }, [busy]);
 
   // Fetch recent briefs and subscribe to live inserts.
   useEffect(() => {
@@ -71,40 +100,71 @@ export function TryBrief({
     };
   }, [signedIn]);
 
+  function openBrief(record: BriefRecord) {
+    setExpandedId(record.id);
+    setOutput(record.output_md);
+    setActivePrompt(record.prompt);
+    setMeta(record.model ? { model: record.model } : null);
+    setError(null);
+    requestAnimationFrame(() => {
+      outputRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
+
   async function onRun() {
+    const trimmed = prompt.trim();
+    if (!trimmed) {
+      setError("Enter a question — Lighthouse uses it to frame the entire brief.");
+      return;
+    }
+
     setBusy(true);
     setError(null);
     setOutput("");
     setMeta(null);
+    setPipelineSteps([]);
+    setActivePrompt(trimmed);
+
     const byok = readByok();
     if (!hasMinimumByok(byok)) {
       setError("Add your API key, base URL and model in Settings, then try again.");
       setBusy(false);
       return;
     }
+
     try {
-      const res = await fetch("/api/try-brief", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          topicId,
-          prompt,
-          byok: {
-            llmApiKey: byok.llmApiKey,
-            llmBaseUrl: byok.llmBaseUrl,
-            llmModelPrimary: byok.llmModelPrimary,
-          },
-        }),
+      const result = await runBriefPipeline({
+        topicId,
+        prompt: trimmed,
+        byok: {
+          llmApiKey: byok.llmApiKey,
+          llmBaseUrl: byok.llmBaseUrl,
+          llmModelPrimary: byok.llmModelPrimary,
+          llmModelQuality: byok.llmModelQuality || undefined,
+        },
+        exaApiKey: byok.exaApiKey || undefined,
+        agentmail:
+          byok.agentmailApiKey && byok.agentmailInboxId
+            ? { apiKey: byok.agentmailApiKey, inboxId: byok.agentmailInboxId }
+            : undefined,
+        onStep: setPipelineSteps,
       });
-      if (!res.ok) {
-        const j = await res.json().catch(() => ({}));
-        throw new Error(j.error ?? `HTTP ${res.status}`);
-      }
-      const j = (await res.json()) as { output: string; model?: string; elapsedMs?: number };
-      setOutput(j.output);
-      setMeta({ model: j.model, elapsedMs: j.elapsedMs });
+
+      setOutput(result.output);
+      setMeta({
+        model: result.model,
+        elapsedMs: result.totalMs,
+        exa: result.exa,
+        delivery: { delivered: 0, failed: 0, pending: true, channels: [] },
+      });
+      requestAnimationFrame(() => {
+        outputRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      setPipelineSteps((prev) =>
+        prev.map((s) => (s.status === "active" ? { ...s, status: "error" as const, detail: "Failed" } : s)),
+      );
     } finally {
       setBusy(false);
     }
@@ -139,8 +199,9 @@ export function TryBrief({
         <div>
           <h2 className="font-display text-2xl text-ink-50">Generate a sample brief</h2>
           <p className="mt-1 text-sm text-ink-400">
-            Pick a topic, ask a question, and Lighthouse drafts a short Markdown brief using <em>your</em> AI provider. Your key is
-            never stored on our servers.
+            All stages run through Kestra: ingest.exa_search → process.classify → process.cluster_summarize (LiteLLM + optional Exa BYOK).
+            Each stage is a separate execution so nothing is
+            rushed — watch progress below.
           </p>
         </div>
         <Link
@@ -156,7 +217,7 @@ export function TryBrief({
           <span className="block text-xs font-semibold uppercase tracking-[0.14em] text-ink-400">Topic</span>
           <select
             value={topicId}
-            onChange={(e) => setTopicId(e.target.value)}
+            onChange={(e) => onTopicChange(e.target.value)}
             className="w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-ink-50 focus:border-beam focus:outline-none"
           >
             {topics.map((t) => (
@@ -171,6 +232,9 @@ export function TryBrief({
           <input
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !busy) void onRun();
+            }}
             className="w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-ink-50 focus:border-beam focus:outline-none"
             placeholder="e.g. What broke and what shipped in the last 24h?"
           />
@@ -190,6 +254,8 @@ export function TryBrief({
           <span className="text-xs text-amber-200">
             Add your API key in <Link href="/settings" className="underline">Settings</Link> first.
           </span>
+        ) : busy ? (
+          <span className="text-xs text-ink-400">Running pipeline… {elapsedSec > 0 ? `${elapsedSec}s` : ""} — quality over speed</span>
         ) : (
           <span className="text-xs text-ink-500">
             Uses the model you configured. No tokens billed by us — your provider, your bill.
@@ -197,17 +263,78 @@ export function TryBrief({
         )}
       </div>
 
+      {busy || pipelineSteps.length > 0 ? (
+        <BriefPipelineProgress steps={pipelineSteps} elapsedSec={elapsedSec} />
+      ) : null}
+
       {error ? (
         <p className="rounded-xl border border-rose-400/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">{error}</p>
       ) : null}
 
+      {!output && !busy && history.length > 0 ? (
+        <p className="rounded-xl border border-white/10 bg-black/20 px-4 py-3 text-xs text-ink-400">
+          Brief finished but left this view? Click a <strong className="font-normal text-ink-200">Recent brief</strong> below to
+          load it here.
+        </p>
+      ) : null}
+
       {output ? (
-        <article className="prose prose-invert max-w-none rounded-2xl border border-white/10 bg-black/30 p-6 text-sm text-ink-100">
+        <article
+          id="brief-output"
+          ref={outputRef}
+          className="prose prose-invert max-w-none rounded-2xl border border-white/10 bg-black/30 p-6 text-sm text-ink-100"
+        >
+          {activePrompt ? (
+            <p className="mb-4 rounded-lg border border-beam/20 bg-beam/5 px-3 py-2 text-xs text-ink-300">
+              <span className="font-semibold uppercase tracking-wider text-beam-glow">Your question</span>
+              <span className="mt-1 block text-sm text-ink-100">{activePrompt}</span>
+            </p>
+          ) : null}
           <BriefBody markdown={output} />
           {meta ? (
-            <p className="mt-4 text-[11px] text-ink-500">
-              Drafted with <span className="font-mono">{meta.model}</span> in {meta.elapsedMs}ms.
-            </p>
+            <div className="mt-4 space-y-1 text-[11px] text-ink-500">
+              <p>
+                Drafted with <span className="font-mono">{meta.model}</span>
+                {meta.elapsedMs ? <> in {meta.elapsedMs}ms</> : null}.
+                {meta.exa?.used ? (
+                  <>
+                    {" "}
+                    · Exa {meta.exa.mode ?? "search"}: {meta.exa.hits} hit{meta.exa.hits === 1 ? "" : "s"}
+                    {meta.exa.error ? <span className="text-amber-200"> ({meta.exa.error})</span> : null}
+                  </>
+                ) : null}
+                {meta.pipeline?.models.polish ? (
+                  <>
+                    {" "}
+                    · polished with <span className="font-mono">{meta.pipeline.models.polish}</span>
+                  </>
+                ) : null}
+              </p>
+              {meta.delivery?.pending ? (
+                <p className="text-ink-400">Delivery: sending to your channels in the background…</p>
+              ) : null}
+              {meta.delivery && meta.delivery.channels.length > 0 ? (
+                <p>
+                  Delivery:{" "}
+                  {meta.delivery.delivered > 0 ? (
+                    <span className="text-emerald-300">
+                      {meta.delivery.delivered} channel{meta.delivery.delivered === 1 ? "" : "s"} sent
+                    </span>
+                  ) : null}
+                  {meta.delivery.failed > 0 ? (
+                    <span className="text-amber-200">
+                      {meta.delivery.delivered > 0 ? " · " : ""}
+                      {meta.delivery.failed} failed (
+                      {meta.delivery.channels
+                        .filter((c) => !c.ok)
+                        .map((c) => `${c.channel}: ${c.error ?? "error"}`)
+                        .join("; ")}
+                      )
+                    </span>
+                  ) : null}
+                </p>
+              ) : null}
+            </div>
           ) : null}
         </article>
       ) : null}
@@ -220,8 +347,10 @@ export function TryBrief({
               <li key={b.id} className="rounded-xl border border-white/10 bg-black/20">
                 <button
                   type="button"
-                  onClick={() => setExpandedId(expandedId === b.id ? null : b.id)}
-                  className="flex w-full items-start justify-between gap-3 px-4 py-3 text-left"
+                  onClick={() => openBrief(b)}
+                  className={`flex w-full items-start justify-between gap-3 px-4 py-3 text-left transition ${
+                    expandedId === b.id ? "bg-beam/5" : "hover:bg-white/[0.03]"
+                  }`}
                 >
                   <span className="flex-1 truncate text-sm text-ink-200">
                     <span className="mr-2 font-mono text-[11px] text-ink-500">{b.topic_id}</span>
@@ -231,14 +360,9 @@ export function TryBrief({
                     {new Date(b.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                   </span>
                 </button>
-                {expandedId === b.id ? (
+                {expandedId === b.id && output !== b.output_md ? (
                   <div className="border-t border-white/10 px-4 py-3">
                     <BriefBody markdown={b.output_md} />
-                    {b.model ? (
-                      <p className="mt-3 text-[11px] text-ink-500">
-                        <span className="font-mono">{b.model}</span>
-                      </p>
-                    ) : null}
                   </div>
                 ) : null}
               </li>
@@ -251,6 +375,9 @@ export function TryBrief({
 }
 
 function BriefBody({ markdown }: { markdown: string }) {
+  if (!markdown?.trim()) {
+    return <p className="text-sm text-amber-200">No brief text was saved for this run.</p>;
+  }
   return (
     <ReactMarkdown
       components={{

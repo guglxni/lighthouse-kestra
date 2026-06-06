@@ -1,0 +1,6 @@
+# Heroku Container deploy — Kestra engine only (data on Supabase).
+# Deploy: ./scripts/deploy-kestra-heroku.sh
+
+build:
+  docker:
+    web: infra/Dockerfile.kestra-heroku

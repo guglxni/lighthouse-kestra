@@ -183,6 +183,28 @@ async function loadTopicsFromRepo(): Promise<TopicPreview[]> {
   return topics;
 }
 
+async function loadSupabaseBriefStats(): Promise<DashboardPayload["services"]["postgres"]> {
+  try {
+    const { createSupabaseAdminClient } = await import("@/lib/supabase/admin");
+    const admin = createSupabaseAdminClient();
+    const { count, error } = await admin.from("sample_briefs").select("*", { count: "exact", head: true });
+    if (error) return { ok: false, error: error.message };
+    return {
+      ok: true,
+      source: "supabase",
+      counts: {
+        documents: 0,
+        embeddings: 0,
+        classifications: 0,
+        briefs: count ?? 0,
+        chatTurns: 0,
+      },
+    };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 async function loadPostgresStats() {
   const p = getPool();
   if (!p) return { ok: false as const, error: "DATABASE_URL not set" };
@@ -211,6 +233,7 @@ async function loadPostgresStats() {
     ]);
     return {
       ok: true as const,
+      source: "postgres" as const,
       counts: {
         documents: Number(documents.rows[0]?.c ?? 0),
         embeddings: Number(embeddings.rows[0]?.c ?? 0),
@@ -291,9 +314,12 @@ export async function loadDashboardPayload(): Promise<DashboardPayload> {
   const flowsByNamespace: Record<string, number> = {};
   let executions: ExecutionPreview[] | undefined;
 
+  const cloudDemo = !kestraUrl;
+
   if (!kestraUrl) {
-    kestraError = "KESTRA_PUBLIC_URL not configured";
+    kestraOk = false;
     kestraMs = 0;
+    kestraError = "KESTRA_PUBLIC_URL not set — briefs require Kestra";
   } else {
     try {
       const samples = await Promise.all(NAMESPACES.map((ns) => fetchFlowsForNamespace(kestraUrl, tenant, ns)));
@@ -329,7 +355,11 @@ export async function loadDashboardPayload(): Promise<DashboardPayload> {
     kestraOk = Boolean(kestraReachable);
   }
 
-  const postgres = await loadPostgresStats();
+  let postgres: DashboardPayload["services"]["postgres"] = await loadPostgresStats();
+  if (!postgres.ok) {
+    const supa = await loadSupabaseBriefStats();
+    if (supa.ok) postgres = supa;
+  }
 
   let litellm: DashboardPayload["services"]["litellm"] = {
     ok: false,
@@ -342,23 +372,26 @@ export async function loadDashboardPayload(): Promise<DashboardPayload> {
     else litellm = { ok: false, error: `LiteLLM HTTP ${lm.status}`, models: [] };
   }
 
-    const demoMode = !postgres.ok || !litellm.ok;
+  const demoMode = cloudDemo ? false : !postgres.ok || !litellm.ok;
 
-    let demoBanner: string | undefined;
-    if (!postgres.ok && !litellm.ok) {
-      demoBanner = "Backend is warming up. You can still browse — sign in to set up your AI key.";
-    } else if (!postgres.ok) {
-      demoBanner = "Library is still warming up. Sign in and try a brief with your own key — that works either way.";
-    } else if (!litellm.ok) {
-      demoBanner = "Optional AI router is offline. Lighthouse uses your own provider key anyway — head to Settings to add it.";
-    } else if (!kestraOk) {
-      // Common when you just spun up the stack — no flows deployed yet.
-      demoBanner = undefined;
-    }
+  let demoBanner: string | undefined;
+  if (cloudDemo) {
+    demoBanner =
+      "Kestra is required for all briefs (Exa + LLMs run through existing flows). Set KESTRA_PUBLIC_URL on this deployment and expose your docker-compose Kestra engine.";
+  } else if (!kestraOk) {
+    demoBanner = kestraError ?? "Kestra engine unreachable — start infra/docker-compose.yml";
+  } else if (!postgres.ok && !litellm.ok) {
+    demoBanner = "Self-hosted Postgres/LiteLLM warming up. Kestra flows will use BYOK inputs from Settings when engine secrets are empty.";
+  } else if (!postgres.ok) {
+    demoBanner = "Document library still indexing — Kestra ingest flows will populate lh.documents.";
+  } else if (!litellm.ok) {
+    demoBanner = "LiteLLM router offline on engine — pass BYOK model credentials via Settings (forwarded to Kestra executions).";
+  }
 
   return {
     generatedAt: new Date().toISOString(),
     demoMode,
+    cloudDemo: cloudDemo || undefined,
     demoBanner,
     envHints: {
       kestraUrl,

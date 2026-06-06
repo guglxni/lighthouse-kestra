@@ -1,0 +1,25 @@
+graph TD
+    ROOT["company.team.lighthouse"]
+
+    INGEST["ingest.*\nrss · arxiv · github · hn_reddit\naudio_video · web_articles · exa_search"]
+    PROCESS["process.*\nembed_dedup · classify · cluster_summarize"]
+    DELIVER["deliver.*\nbrief"]
+    SERVE["serve.*\nchat_brief · deepdive"]
+    MONITORS["monitors\nalerts"]
+    MAINT["maintenance\ngraphify_docs"]
+
+    ROOT --> INGEST
+    ROOT --> PROCESS
+    ROOT --> DELIVER
+    ROOT --> SERVE
+    ROOT --> MONITORS
+    ROOT --> MAINT
+
+    INGEST -- "Flow trigger on SUCCESS\n(one trigger per source)" --> PROCESS
+    PROCESS -- "08:00 schedule\nper topic" --> DELIVER
+
+    MONITORS -. "ExecutionNamespaceCondition\nprefix: true\ncovers ALL sub-namespaces\nautomatically" .-> ROOT
+
+    style MONITORS fill:#ff6b6b,color:#fff
+    style ROOT fill:#4a90e2,color:#fff
+    style PROCESS fill:#27ae60,color:#fff

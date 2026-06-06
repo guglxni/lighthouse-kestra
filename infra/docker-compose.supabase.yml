@@ -1,0 +1,90 @@
+# Lighthouse engine against Supabase Postgres (no local Postgres).
+# Usage:
+#   export $(grep -v '^#' .env.supabase | xargs)   # after scripts/supabase-backend-env.sh
+#   docker compose -f infra/docker-compose.supabase.yml up -d
+
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:v1.82.3-stable
+    container_name: lighthouse-litellm
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./litellm/config.yaml:/app/config.yaml:ro
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_API_KEY:-sk-lighthouse-local}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      CUSTOM_LLM_BASE_URL: ${CUSTOM_LLM_BASE_URL:-}
+      CUSTOM_LLM_API_KEY: ${CUSTOM_LLM_API_KEY:-}
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+
+  kestra:
+    image: kestra/kestra:v0.21.0
+    container_name: lighthouse-kestra
+    restart: unless-stopped
+    user: "root"
+    command: server standalone --worker-thread=8
+    depends_on:
+      litellm:
+        condition: service_started
+    environment:
+      KESTRA_CONFIGURATION: |
+        datasources:
+          postgres:
+            url: jdbc:postgresql://${SUPABASE_DB_HOST}:${SUPABASE_DB_PORT:-5432}/${SUPABASE_DB_NAME:-postgres}?sslmode=require
+            driverClassName: org.postgresql.Driver
+            username: ${SUPABASE_DB_USER:-postgres}
+            password: ${SUPABASE_DB_PASSWORD}
+        kestra:
+          server:
+            basic-auth:
+              enabled: ${KESTRA_BASIC_AUTH_ENABLED:-false}
+          repository:
+            type: postgres
+          storage:
+            type: local
+            local:
+              base-path: "/app/storage"
+          queue:
+            type: postgres
+          tasks:
+            tmp-dir:
+              path: /tmp/kestra-wd/tmp
+          url: ${KESTRA_PUBLIC_URL:-http://localhost:8080}/
+      SECRET_LITELLM_BASE_URL: ${LITELLM_BASE_URL:-http://litellm:4000/v1}
+      SECRET_LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-lighthouse-local}
+      SECRET_LITELLM_MODEL_PRIMARY: ${LITELLM_MODEL_PRIMARY:-gpt-4o}
+      SECRET_LITELLM_MODEL_FALLBACK: ${LITELLM_MODEL_FALLBACK:-gpt-4o-mini}
+      SECRET_OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      SECRET_ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      SECRET_GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      SECRET_KESTRA_PUBLIC_URL: ${KESTRA_PUBLIC_URL:-http://localhost:8080}
+      SECRET_DEMO_NOTIFY_URL: ${DEMO_NOTIFY_URL:-https://demo-beta-topaz.vercel.app}
+      SECRET_DEMO_NOTIFY_SECRET: ${DEMO_NOTIFY_SECRET:-}
+      SECRET_EXA_API_KEY: ${EXA_API_KEY:-}
+      SECRET_EXA_API_BASE: ${EXA_API_BASE:-https://api.exa.ai}
+      SECRET_POSTGRES_HOST: ${SUPABASE_DB_HOST}
+      SECRET_POSTGRES_PORT: "${SUPABASE_DB_PORT:-5432}"
+      SECRET_POSTGRES_DB: ${SUPABASE_DB_NAME:-postgres}
+      SECRET_POSTGRES_USER: ${SUPABASE_DB_USER:-postgres}
+      SECRET_POSTGRES_PASSWORD: ${SUPABASE_DB_PASSWORD}
+      SECRET_SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      SECRET_DISCORD_WEBHOOK_AGENTIC: ${DISCORD_WEBHOOK_AGENTIC:-}
+      SECRET_DISCORD_WEBHOOK_SOLANA: ${DISCORD_WEBHOOK_SOLANA:-}
+      SECRET_DISCORD_WEBHOOK_INDIE: ${DISCORD_WEBHOOK_INDIE:-}
+      SECRET_DISCORD_WEBHOOK_DATAENG: ${DISCORD_WEBHOOK_DATAENG:-}
+      SECRET_GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      SECRET_REDDIT_USER_AGENT: ${REDDIT_USER_AGENT:-lighthouse-research/0.1}
+    volumes:
+      - kestra-storage:/app/storage
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ../flows:/app/flows:ro
+    ports:
+      - "8080:8080"
+
+volumes:
+  kestra-storage:

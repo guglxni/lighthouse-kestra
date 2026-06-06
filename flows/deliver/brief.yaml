@@ -32,8 +32,8 @@ tasks:
       DISCORD_INDIE: "{{ secret('DISCORD_WEBHOOK_INDIE') }}"
       DISCORD_DATAENG: "{{ secret('DISCORD_WEBHOOK_DATAENG') }}"
       SLACK_WEBHOOK_URL: "{{ secret('SLACK_WEBHOOK_URL') }}"
-      DEMO_NOTIFY_URL: "{{ kv('DEMO_NOTIFY_URL') }}"
-      DEMO_NOTIFY_SECRET: "{{ kv('DEMO_NOTIFY_SECRET') }}"
+      DEMO_NOTIFY_URL: "{{ secret('DEMO_NOTIFY_URL') }}"
+      DEMO_NOTIFY_SECRET: "{{ secret('DEMO_NOTIFY_SECRET') }}"
     script: |
       import os
       import httpx
@@ -109,11 +109,29 @@ tasks:
           print("notify: DEMO_NOTIFY_URL or DEMO_NOTIFY_SECRET not set, skipping per-user delivery")
 
 triggers:
-  - id: morning
+  - id: deliver_agentic_eng
     type: io.kestra.plugin.core.trigger.Schedule
     cron: "0 8 * * *"
     inputs:
       topic_id: agentic-eng
+
+  - id: deliver_solana_zk
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "30 8 * * *"
+    inputs:
+      topic_id: solana-zk
+
+  - id: deliver_indie_saas
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "0 9 * * *"
+    inputs:
+      topic_id: indie-saas
+
+  - id: deliver_data_eng_ai
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "30 9 * * *"
+    inputs:
+      topic_id: data-eng-ai
 
 errors:
   - id: log_failure

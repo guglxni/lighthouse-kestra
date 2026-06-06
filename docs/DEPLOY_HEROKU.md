@@ -1,25 +1,98 @@
-# Heroku & GitHub Student Developer Pack
+# Deploy Kestra on Heroku + Supabase
 
-## Credits (GitHub Students)
+Use **Heroku credits** for the Kestra engine and **Supabase** for Postgres + auth.
 
-Through the [GitHub Student Developer Pack](https://education.github.com/pack), Heroku has offered **monthly platform credits** (commonly cited as **USD $13/month for 12 months** when enrolled via [Heroku for GitHub Students](https://www.heroku.com/github-students/)). Offers change — confirm the current benefit on GitHub Education and Heroku’s signup page.
+| Layer | Host | Cost |
+|-------|------|------|
+| Vercel demo | `demo-beta-topaz.vercel.app` | Free tier |
+| **Kestra** | **Heroku** (`lighthouse-kestra`) | Student credits / ~$25 Standard-1X |
+| **Postgres** | **Supabase** (`qtvlohzprhrworvhlchk`) | Free tier |
+| LiteLLM | *Not deployed* — flows call OpenAI-compatible API directly | BYOK `OPENAI_API_KEY` on Heroku |
 
-**Verify on your account (not exposed in plain CLI):**
+## Prerequisites
 
-1. [Heroku Dashboard](https://dashboard.heroku.com) → **Account settings** → **Billing**.
-2. Look for **Platform credits** / student credits (see [Heroku Help](https://help.heroku.com/5NWYWU7I/how-can-i-check-if-my-platform-credits-associated-with-the-heroku-for-github-students-program-have-been-applied-to-my-account)).
+```bash
+heroku login
+supabase login
+supabase link --project-ref qtvlohzprhrworvhlchk
+```
 
-CLI check: `heroku auth:whoami` only confirms login (you have `heroku` installed).
+## 1. Supabase — pipeline tables (`lh.*`)
 
-**Important:** credits usually **do not roll over**; usage beyond the monthly allocation bills to your payment method. A card is typically required to redeem student offers.
+```bash
+./scripts/repair-supabase-migrations.sh   # if db push complains about history
+# or
+./scripts/deploy-supabase-backend.sh
+```
 
-## Lighthouse on Heroku
+Password: Supabase Dashboard → **Settings → Database**.
 
-Lighthouse’s default stack is **multi-container** (Kestra + Postgres + pgvector + LiteLLM + Miniflux + SearxNG + worker). Heroku does **not** run `docker-compose.yml` as a single unit. Running the **full** demo means either:
+## 2. Heroku — Kestra container
 
-- **Splitting** into multiple Heroku apps / add-ons (complex, costly), or  
-- **Trimming** to a subset (e.g. API-only or static site) and hosting the orchestrator elsewhere.
+```bash
+export SUPABASE_DB_PASSWORD='...'
+export OPENAI_API_KEY='sk-...'          # or set LITELLM_BASE_URL + LITELLM_API_KEY
+export EXA_API_KEY='...'                # optional
+./scripts/deploy-kestra-heroku.sh
+```
 
-For a **faithful** deployment, a **VPS** or **container platform** that runs Compose or Kubernetes is usually simpler than Heroku. See [`SECURITY.md`](../SECURITY.md) for operational risks (Docker socket, DB exposure).
+Creates app `lighthouse-kestra` (override with `HEROKU_APP_NAME`).
 
-This doc is for **verifying your student credits** and **sanity-checking cost** — not a turnkey Heroku port of the whole stack.
+After deploy:
+
+- API: `https://lighthouse-kestra.herokuapp.com`
+- UI: `https://lighthouse-kestra.herokuapp.com/ui`
+
+**Dyno sizing:** script tries `standard-1x` (2GB). If credits are tight it falls back to `basic` (512MB) — may OOM on heavy briefs.
+
+**No Docker socket on Heroku** — the Heroku image swaps Script tasks to **Process** runner (see `infra/Dockerfile.kestra-heroku`).
+
+## 3. Vercel — point demo at Heroku + Supabase
+
+```bash
+cd demo
+vercel env add KESTRA_PUBLIC_URL production
+# https://lighthouse-kestra.herokuapp.com
+
+vercel env add NOTIFY_SECRET production
+# same value as DEMO_NOTIFY_SECRET on Heroku
+
+vercel env add DATABASE_URL production
+# postgresql://postgres:PASSWORD@db.qtvlohzprhrworvhlchk.supabase.co:5432/postgres?sslmode=require
+
+vercel --prod
+```
+
+## 4. Verify
+
+1. Dashboard → Engine pill **live**
+2. Run sample brief → Kestra executions for `exa_search`, `classify`, `cluster_summarize`
+3. `lh.briefs` row in Supabase SQL editor
+4. Delivery via `deliver.brief` → Vercel `/api/notify`
+
+## Student credits
+
+Check: Heroku Dashboard → **Account settings → Billing → Platform credits**.
+
+Credits typically do not roll over month to month.
+
+## Troubleshooting
+
+| Issue | Fix |
+|-------|-----|
+| `H10 App crashed` | `heroku logs --tail -a lighthouse-kestra` — often bad `SUPABASE_DB_PASSWORD` or OOM |
+| Brief 503 on Vercel | `KESTRA_PUBLIC_URL` missing or Heroku app sleeping (use Standard, not Eco sleep) |
+| Flow script fails | Process runner lacks Playwright — `web_articles` deep extract may skip; Exa/classify/summarize work |
+| Migration drift | `./scripts/repair-supabase-migrations.sh` |
+
+## Architecture
+
+```
+Vercel demo  ──POST executions──►  Heroku Kestra
+       │                              │
+       │ DATABASE_URL                 │ JDBC (SUPABASE_DB_*)
+       ▼                              ▼
+              Supabase Postgres (lh.* + public.*)
+```
+
+See also [`DEPLOY_SUPABASE.md`](./DEPLOY_SUPABASE.md) for local `docker-compose.supabase.yml` dev.

@@ -1,0 +1,33 @@
+# Fly.io — Kestra engine (compute) + Supabase Postgres (data).
+# Deploy: ./scripts/deploy-kestra-fly.sh
+
+app = "lighthouse-kestra"
+primary_region = "syd"
+
+[build]
+  dockerfile = "infra/Dockerfile.kestra-fly"
+
+[env]
+  KESTRA_TENANT = "main"
+  SUPABASE_DB_PORT = "5432"
+  SUPABASE_DB_NAME = "postgres"
+  SUPABASE_DB_USER = "postgres"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "60s"
+    interval = "30s"
+    method = "GET"
+    path = "/api/v1/main/flows/search?size=1"
+    timeout = "10s"
+
+[[vm]]
+  memory = "2gb"
+  cpu_kind = "shared"
+  cpus = 2

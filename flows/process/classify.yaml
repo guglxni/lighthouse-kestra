@@ -18,6 +18,18 @@ inputs:
   - id: use_multi_llm
     type: BOOLEAN
     defaults: false
+  - id: llm_base_url
+    type: STRING
+    required: false
+  - id: llm_api_key
+    type: STRING
+    required: false
+  - id: model_primary
+    type: STRING
+    required: false
+  - id: model_fallback
+    type: STRING
+    required: false
 
 tasks:
   - id: classify_batch
@@ -31,10 +43,10 @@ tasks:
       PGDATABASE: "{{ secret('POSTGRES_DB') }}"
       PGUSER: "{{ secret('POSTGRES_USER') }}"
       PGPASSWORD: "{{ secret('POSTGRES_PASSWORD') }}"
-      LITELLM_BASE_URL: "{{ secret('LITELLM_BASE_URL') }}"
-      LITELLM_API_KEY: "{{ secret('LITELLM_API_KEY') }}"
-      MODEL_PRIMARY: "{{ secret('LITELLM_MODEL_PRIMARY') }}"
-      MODEL_FALLBACK: "{{ secret('LITELLM_MODEL_FALLBACK') }}"
+      LITELLM_BASE_URL: "{{ inputs.llm_base_url | default(secret('LITELLM_BASE_URL')) }}"
+      LITELLM_API_KEY: "{{ inputs.llm_api_key | default(secret('LITELLM_API_KEY')) }}"
+      MODEL_PRIMARY: "{{ inputs.model_primary | default(secret('LITELLM_MODEL_PRIMARY')) }}"
+      MODEL_FALLBACK: "{{ inputs.model_fallback | default(secret('LITELLM_MODEL_FALLBACK')) }}"
       TOPIC_ID: "{{ inputs.topic_id }}"
       DOC_LIMIT: "{{ inputs.limit }}"
       USE_MULTI: "{{ inputs.use_multi_llm }}"
@@ -161,12 +173,51 @@ tasks:
     prompt: "Classify relevance of this stub text about Kestra workflows."
 
 triggers:
-  - id: schedule
+  - id: schedule_agentic_eng
     type: io.kestra.plugin.core.trigger.Schedule
     cron: "15 */4 * * *"
     inputs:
       topic_id: agentic-eng
       use_multi_llm: false
+
+  - id: schedule_solana_zk
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "20 */4 * * *"
+    inputs:
+      topic_id: solana-zk
+      use_multi_llm: false
+
+  - id: schedule_indie_saas
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "25 */4 * * *"
+    inputs:
+      topic_id: indie-saas
+      use_multi_llm: false
+
+  - id: schedule_data_eng_ai
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "30 */4 * * *"
+    inputs:
+      topic_id: data-eng-ai
+      use_multi_llm: false
+
+  - id: after_embed
+    type: io.kestra.plugin.core.trigger.Flow
+    inputs:
+      topic_id: "{{ trigger.execution.inputs.topic_id }}"
+    conditions:
+      - type: io.kestra.plugin.core.condition.ExecutionFlow
+        namespace: company.team.lighthouse.process
+        flowId: embed_dedup
+      - type: io.kestra.plugin.core.condition.ExecutionStatus
+        in:
+          - SUCCESS
+    states:
+      - SUCCESS
+
+  - id: on_demand
+    type: io.kestra.plugin.core.trigger.Webhook
+    key: classify
 
 errors:
   - id: log_failure

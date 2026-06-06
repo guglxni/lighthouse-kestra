@@ -1,0 +1,46 @@
+erDiagram
+    DOCUMENTS {
+        uuid id PK
+        text topic_id
+        text source
+        text source_id
+        text url
+        text title
+        text raw_text
+        jsonb metadata
+        timestamptz published_at
+    }
+    EMBEDDINGS {
+        uuid document_id PK
+        vector embedding
+        text model
+        timestamptz created_at
+    }
+    CLASSIFICATIONS {
+        uuid id PK
+        uuid document_id FK
+        text topic_id
+        numeric relevance
+        text category
+        text model
+    }
+    BRIEFS {
+        uuid id PK
+        text topic_id
+        date date
+        text markdown
+        jsonb clusters
+        text_array delivered_to
+    }
+    CHAT_HISTORY {
+        bigserial id PK
+        text session_id
+        text topic_id
+        text role
+        text content
+    }
+
+    DOCUMENTS ||--o| EMBEDDINGS : has
+    DOCUMENTS ||--o{ CLASSIFICATIONS : scored_by
+    BRIEFS }o..o{ DOCUMENTS : clusters_via_jsonb
+    CHAT_HISTORY }|..o{ DOCUMENTS : retrieves_via_pgvector

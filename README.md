@@ -4,6 +4,16 @@
 
 [![Validate flows](https://github.com/guglxni/lighthouse-kestra/actions/workflows/validate-flows.yml/badge.svg)](https://github.com/guglxni/lighthouse-kestra/actions/workflows/validate-flows.yml)
 
+**Live demo (Next.js front door):** [demo-beta-topaz.vercel.app](https://demo-beta-topaz.vercel.app)
+
+**Agent skill — use Lighthouse (not develop it):** connects agents via [WebMCP](https://github.com/webmachinelearning/webmcp) on the live dashboard.
+
+```bash
+npx skills add guglxni/lighthouse-kestra --skill lighthouse -y
+```
+
+See [`skills/README.md`](skills/README.md) for install flags and WebMCP tool list.
+
 ---
 
 ## What it is

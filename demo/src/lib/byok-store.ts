@@ -17,6 +17,8 @@ export type ByokStore = {
   providers: LlmProvider[];
   activeProviderId: string | null;
   exaApiKey: string;
+  agentmailApiKey: string;
+  agentmailInboxId: string;
 };
 
 // Legacy type kept for TryBrief / api/try-brief compatibility
@@ -26,19 +28,28 @@ export type ByokKeys = {
   llmModelPrimary: string;
   llmModelQuality: string;
   exaApiKey: string;
+  agentmailApiKey: string;
+  agentmailInboxId: string;
 };
 
 const V2_KEY = "lighthouse.byok.v2";
 const V1_KEY = "lighthouse.byok.v1";
 
 function emptyStore(): ByokStore {
-  return { version: 2, providers: [], activeProviderId: null, exaApiKey: "" };
+  return { version: 2, providers: [], activeProviderId: null, exaApiKey: "", agentmailApiKey: "", agentmailInboxId: "" };
 }
 
 function migrateRaw(raw: string): ByokStore {
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
-    if (parsed?.version === 2) return parsed as unknown as ByokStore;
+    if (parsed?.version === 2) {
+      const s = parsed as unknown as ByokStore;
+      return {
+        ...s,
+        agentmailApiKey: s.agentmailApiKey ?? "",
+        agentmailInboxId: s.agentmailInboxId ?? "",
+      };
+    }
     // v1 → v2: single provider upgrade
     const store = emptyStore();
     if (parsed?.llmApiKey || parsed?.llmBaseUrl) {
@@ -54,6 +65,8 @@ function migrateRaw(raw: string): ByokStore {
       store.activeProviderId = id;
     }
     store.exaApiKey = String(parsed?.exaApiKey ?? "");
+    store.agentmailApiKey = String(parsed?.agentmailApiKey ?? "");
+    store.agentmailInboxId = String(parsed?.agentmailInboxId ?? "");
     return store;
   } catch {
     return emptyStore();
@@ -114,6 +127,8 @@ export function readByok(): ByokKeys {
     llmModelPrimary: active?.modelPrimary ?? "",
     llmModelQuality: active?.modelQuality ?? "",
     exaApiKey: store.exaApiKey,
+    agentmailApiKey: store.agentmailApiKey,
+    agentmailInboxId: store.agentmailInboxId,
   };
 }
 
@@ -141,6 +156,8 @@ export function writeByok(keys: ByokKeys) {
     }
   }
   store.exaApiKey = keys.exaApiKey;
+  store.agentmailApiKey = keys.agentmailApiKey;
+  store.agentmailInboxId = keys.agentmailInboxId;
   writeByokStore(store);
 }
 

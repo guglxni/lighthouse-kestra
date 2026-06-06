@@ -1,10 +1,9 @@
 id: exa_search
 namespace: company.team.lighthouse.ingest
 description: |
-  Optional semantic search enrichment — **Exa BYOK** (`EXA_API_KEY`).
-  Override API origin with `EXA_API_BASE` if Exa or a proxy uses a custom
-  base URL (default `https://api.exa.ai`). `allowFailure: true` when the key
-  is absent or the API errors.
+  Semantic search enrichment via Exa — results persist into `lh.documents` so
+  `process.classify` and `process.cluster_summarize` can run on the same pipeline.
+  Optional BYOK: pass `exa_api_key` on execution inputs; else uses `EXA_API_KEY` secret.
 
 labels:
   layer: ingest
@@ -17,26 +16,135 @@ inputs:
   - id: query
     type: STRING
     defaults: agentic engineering orchestration
+  - id: exa_api_key
+    type: STRING
+    required: false
+    description: Optional BYOK override for this execution (dashboard → Kestra trigger).
+
+taskDefaults:
+  - type: io.kestra.plugin.jdbc.postgresql.Query
+    values:
+      url: "jdbc:postgresql://{{ secret('POSTGRES_HOST') }}:{{ secret('POSTGRES_PORT') }}/{{ secret('POSTGRES_DB') }}"
+      username: "{{ secret('POSTGRES_USER') }}"
+      password: "{{ secret('POSTGRES_PASSWORD') }}"
 
 tasks:
-  - id: search
-    type: io.kestra.plugin.core.http.Request
-    uri: "{{ secret('EXA_API_BASE') }}/search"
-    method: POST
-    contentType: application/json
-    headers:
-      Authorization: Bearer {{ secret('EXA_API_KEY') }}
-    body: |
-      {"query": "{{ inputs.query }}", "numResults": 5}
-    allowFailure: true
-    retry:
-      type: constant
-      maxAttempts: 3
-      interval: PT2S
+  - id: fetch_and_parse
+    type: io.kestra.plugin.scripts.python.Script
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      image: lighthouse/worker:latest
+    outputFiles:
+      - documents.json
+    env:
+      EXA_API_KEY: "{{ inputs.exa_api_key | default(secret('EXA_API_KEY')) }}"
+      EXA_API_BASE: "{{ secret('EXA_API_BASE') }}"
+      QUERY: "{{ inputs.query }}"
+      TOPIC_ID: "{{ inputs.topic_id }}"
+    script: |
+      import hashlib, json, os, sys
+      import httpx
 
-  - id: log_hits
+      key = (os.environ.get("EXA_API_KEY") or "").strip()
+      base = (os.environ.get("EXA_API_BASE") or "https://api.exa.ai").rstrip("/")
+      query = os.environ["QUERY"]
+      topic = os.environ["TOPIC_ID"]
+      docs = []
+
+      if not key:
+          print("exa: no API key — skipping")
+          json.dump(docs, open("documents.json", "w"))
+          sys.exit(0)
+
+      payload = {"query": query, "numResults": 8, "type": "auto", "contents": {"text": {"maxCharacters": 4000}}}
+      headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+      try:
+          with httpx.Client(timeout=90.0) as client:
+              r = client.post(f"{base}/search", json=payload, headers=headers)
+          if r.status_code >= 400:
+              print(f"exa: HTTP {r.status_code} {r.text[:200]}")
+              json.dump(docs, open("documents.json", "w"))
+              sys.exit(0)
+          data = r.json()
+      except Exception as exc:
+          print(f"exa: request failed: {exc}")
+          json.dump(docs, open("documents.json", "w"))
+          sys.exit(0)
+
+      for item in data.get("results") or []:
+          url = item.get("url") or ""
+          title = item.get("title") or url or "Exa result"
+          text = (item.get("text") or item.get("summary") or "")[:12000]
+          sid = hashlib.sha256((url or title).encode()).hexdigest()[:32]
+          docs.append({
+              "topic_id": topic,
+              "source": "exa",
+              "source_id": sid,
+              "url": url,
+              "title": title,
+              "author": None,
+              "published_at": item.get("publishedDate") or "",
+              "raw_text": text,
+              "language": "en",
+              "metadata": {"exa_score": item.get("score"), "query": query},
+          })
+
+      json.dump(docs, open("documents.json", "w"), ensure_ascii=False)
+      print(f"exa: prepared {len(docs)} documents")
+
+  - id: insert_documents
+    type: io.kestra.plugin.jdbc.postgresql.Queries
+    runIf: "{{ read(outputs.fetch_and_parse.outputFiles['documents.json']) != '[]' }}"
+    sqlType: PREPARED
+    sql: |
+      INSERT INTO lh.documents (topic_id, source, source_id, url, title, author, published_at, raw_text, language, metadata)
+      SELECT
+        d->>'topic_id', d->>'source', d->>'source_id',
+        d->>'url', d->>'title', NULLIF(d->>'author',''),
+        NULLIF(d->>'published_at','')::timestamptz,
+        d->>'raw_text', d->>'language',
+        COALESCE(d->'metadata', '{}'::jsonb)
+      FROM jsonb_array_elements('{{ read(outputs.fetch_and_parse.outputFiles['documents.json']) }}'::jsonb) AS d
+      ON CONFLICT (topic_id, source, source_id) DO UPDATE
+        SET raw_text = EXCLUDED.raw_text,
+            title = EXCLUDED.title,
+            metadata = EXCLUDED.metadata,
+            fetched_at = now()
+      RETURNING id, source_id;
+    fetchType: STORE
+
+  - id: emit_done
     type: io.kestra.plugin.core.log.Log
-    message: "exa_search topic={{ inputs.topic_id }} code={{ outputs.search.code ?? 'skipped' }}"
+    message: "exa_search topic={{ inputs.topic_id }} inserted={{ outputs.insert_documents.size ?? 0 }}"
+
+triggers:
+  - id: schedule_agentic_eng
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "5 */6 * * *"
+    inputs:
+      topic_id: agentic-eng
+
+  - id: schedule_solana_zk
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "10 */6 * * *"
+    inputs:
+      topic_id: solana-zk
+
+  - id: schedule_indie_saas
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "15 */6 * * *"
+    inputs:
+      topic_id: indie-saas
+
+  - id: schedule_data_eng_ai
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "20 */6 * * *"
+    inputs:
+      topic_id: data-eng-ai
+
+  - id: on_demand
+    type: io.kestra.plugin.core.trigger.Webhook
+    key: exa-search
 
 errors:
   - id: log_failure

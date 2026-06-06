@@ -16,6 +16,29 @@ inputs:
   - id: use_multi_llm
     type: BOOLEAN
     defaults: false
+  - id: user_prompt
+    type: STRING
+    required: false
+    description: Optional lens for on-demand briefs (dashboard question).
+  - id: topic_context
+    type: STRING
+    required: false
+  - id: llm_base_url
+    type: STRING
+    required: false
+  - id: llm_api_key
+    type: STRING
+    required: false
+  - id: model_primary
+    type: STRING
+    required: false
+  - id: model_fallback
+    type: STRING
+    required: false
+  - id: model_quality
+    type: STRING
+    required: false
+    description: Optional second-pass polish model (BYOK).
 
 tasks:
   - id: summarize_and_persist
@@ -23,18 +46,23 @@ tasks:
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
       image: lighthouse/worker:latest
+    outputFiles:
+      - brief.md
     env:
       PGHOST: "{{ secret('POSTGRES_HOST') }}"
       PGPORT: "{{ secret('POSTGRES_PORT') }}"
       PGDATABASE: "{{ secret('POSTGRES_DB') }}"
       PGUSER: "{{ secret('POSTGRES_USER') }}"
       PGPASSWORD: "{{ secret('POSTGRES_PASSWORD') }}"
-      LITELLM_BASE_URL: "{{ secret('LITELLM_BASE_URL') }}"
-      LITELLM_API_KEY: "{{ secret('LITELLM_API_KEY') }}"
-      MODEL_PRIMARY: "{{ secret('LITELLM_MODEL_PRIMARY') }}"
-      MODEL_FALLBACK: "{{ secret('LITELLM_MODEL_FALLBACK') }}"
+      LITELLM_BASE_URL: "{{ inputs.llm_base_url | default(secret('LITELLM_BASE_URL')) }}"
+      LITELLM_API_KEY: "{{ inputs.llm_api_key | default(secret('LITELLM_API_KEY')) }}"
+      MODEL_PRIMARY: "{{ inputs.model_primary | default(secret('LITELLM_MODEL_PRIMARY')) }}"
+      MODEL_FALLBACK: "{{ inputs.model_fallback | default(secret('LITELLM_MODEL_FALLBACK')) }}"
+      MODEL_QUALITY: "{{ inputs.model_quality | default('') }}"
       TOPIC_ID: "{{ inputs.topic_id }}"
       USE_MULTI: "{{ inputs.use_multi_llm }}"
+      USER_PROMPT: "{{ inputs.user_prompt | default('') }}"
+      TOPIC_CONTEXT: "{{ inputs.topic_context | default('') }}"
     script: |
       import os
       import httpx
@@ -46,6 +74,9 @@ tasks:
       key = os.environ["LITELLM_API_KEY"]
       primary = os.environ["MODEL_PRIMARY"]
       fallback = os.environ["MODEL_FALLBACK"]
+      quality = (os.environ.get("MODEL_QUALITY") or "").strip()
+      user_prompt = (os.environ.get("USER_PROMPT") or "").strip()
+      topic_context = (os.environ.get("TOPIC_CONTEXT") or f"Topic id: {topic}").strip()
 
       conn = psycopg.connect(
           host=os.environ["PGHOST"],
@@ -55,7 +86,7 @@ tasks:
           password=os.environ["PGPASSWORD"],
       )
       sql = """
-      SELECT d.title, d.url, c.relevance, c.category
+      SELECT d.title, d.url, d.raw_text, c.relevance, c.category
       FROM lh.classifications c
       JOIN lh.documents d ON d.id = c.document_id
       WHERE c.topic_id = %s
@@ -65,24 +96,30 @@ tasks:
       lines = []
       with conn.cursor() as cur:
           cur.execute(sql, (topic,))
-          for title, url, rel, cat in cur.fetchall():
-              lines.append(f"- ({rel}) [{cat}] {title} — {url}")
+          for title, url, raw, rel, cat in cur.fetchall():
+              snippet = (raw or "")[:400].replace("\n", " ")
+              lines.append(f"- ({rel}) [{cat}] {title} — {url}\n  {snippet}")
       conn.close()
 
       digest = "\n".join(lines) or "(no classified documents yet)"
       system = (
-          "You are Lighthouse. Given bullet research items, produce a concise daily "
-          "briefing in Markdown with sections: ## Themes, ## Notable links, ## Open questions."
+          "You are Lighthouse, a research operating system producing a daily intelligence brief.\n"
+          "Write comprehensive Markdown (600–1000 words) grounded in the research items.\n"
+          "Sections: ## Executive summary, ## Key developments (with URLs), ## Themes & implications, ## Reading list.\n"
+          "Cite real URLs only; never invent links. Answer the user's question directly."
       )
+      user_msg = f"{topic_context}\n\n## Research digest\n{digest}"
+      if user_prompt:
+          user_msg += f"\n\n## User question\n{user_prompt}"
 
-      def chat(model: str) -> str:
+      def chat(model: str, sys_prompt: str, content: str, temp: float = 0.3) -> str:
           payload = {
               "model": model,
               "messages": [
-                  {"role": "system", "content": system},
-                  {"role": "user", "content": digest},
+                  {"role": "system", "content": sys_prompt},
+                  {"role": "user", "content": content},
               ],
-              "temperature": 0.35,
+              "temperature": temp,
           }
           headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
           with httpx.Client(timeout=180.0) as client:
@@ -91,12 +128,25 @@ tasks:
               return r.json()["choices"][0]["message"]["content"]
 
       try:
-          md = chat(primary)
+          md = chat(primary, system, user_msg, 0.25)
       except Exception as exc:
-        print(f"primary summarize failed: {exc}")
-        if not use_multi:
-          raise
-        md = chat(fallback)
+          print(f"primary summarize failed: {exc}")
+          if not use_multi:
+              raise
+          md = chat(fallback, system, user_msg, 0.25)
+
+      if quality:
+          polish_sys = (
+              "You are a senior research editor. Expand and sharpen the draft brief. "
+              "Target 800–1200 words. Preserve Markdown structure and all valid URLs."
+          )
+          polish_user = f"User question:\n{user_prompt or 'Daily brief'}\n\nDraft:\n\n{md}"
+          try:
+              md = chat(quality, polish_sys, polish_user, 0.2)
+          except Exception as exc:
+              print(f"quality polish skipped: {exc}")
+
+      open("brief.md", "w", encoding="utf-8").write(md)
 
       conn = psycopg.connect(
           host=os.environ["PGHOST"],
@@ -119,6 +169,11 @@ tasks:
       conn.close()
       print("brief upsert ok")
 
+outputs:
+  - id: markdown
+    type: STRING
+    value: "{{ read(outputs.summarize_and_persist.outputFiles['brief.md']) }}"
+
   - id: reference_chatcompletion
     type: io.kestra.plugin.ai.completion.ChatCompletion
     description: |
@@ -136,11 +191,47 @@ tasks:
         content: "Reference only."
 
 triggers:
-  - id: schedule
+  - id: cluster_agentic_eng
     type: io.kestra.plugin.core.trigger.Schedule
     cron: "30 7 * * *"
     inputs:
       topic_id: agentic-eng
+
+  - id: cluster_solana_zk
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "0 8 * * *"
+    inputs:
+      topic_id: solana-zk
+
+  - id: cluster_indie_saas
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "30 8 * * *"
+    inputs:
+      topic_id: indie-saas
+
+  - id: cluster_data_eng_ai
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "0 9 * * *"
+    inputs:
+      topic_id: data-eng-ai
+
+  - id: after_classify
+    type: io.kestra.plugin.core.trigger.Flow
+    inputs:
+      topic_id: "{{ trigger.execution.inputs.topic_id }}"
+    conditions:
+      - type: io.kestra.plugin.core.condition.ExecutionFlow
+        namespace: company.team.lighthouse.process
+        flowId: classify
+      - type: io.kestra.plugin.core.condition.ExecutionStatus
+        in:
+          - SUCCESS
+    states:
+      - SUCCESS
+
+  - id: on_demand
+    type: io.kestra.plugin.core.trigger.Webhook
+    key: cluster-summarize
 
 errors:
   - id: log_failure

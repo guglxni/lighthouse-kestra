@@ -36,7 +36,7 @@ const pipeline = [
     id: "deliver",
     tag: "03 · Deliver",
     title: "Write & ship the brief",
-    body: "Your AI provider drafts the Markdown brief from the cluster summaries. Lighthouse posts it to email, Slack, Discord, or Notion — whichever channels you configured.",
+    body: "Your AI provider drafts the Markdown brief from the cluster summaries. Lighthouse auto-formats and posts it to email (HTML), Slack (mrkdwn), Discord (native MD), Telegram (HTML), or Notion — whichever channels you configured.",
     flows: ["deliver.brief", "serve.chat_brief", "serve.deepdive"],
     accent: "flare" as const,
   },
@@ -74,6 +74,13 @@ const credits = [
   { name: "PostgreSQL + pgvector", href: "https://github.com/pgvector/pgvector", role: "Search + storage", body: "Documents, embeddings and briefs live in the same database. One join away." },
   { name: "Framer Motion", href: "https://www.framer.com/motion/", role: "Animation runtime", body: "The hero text, page transitions, marquee, magnet cursors — all backed by Framer Motion." },
   { name: "react-markdown", href: "https://github.com/remarkjs/react-markdown", role: "Brief rendering", body: "Renders the sample brief safely with custom components — no innerHTML." },
+  {
+    name: "WebMCP",
+    href: "https://github.com/webmachinelearning/webmcp",
+    role: "Agent-native dashboard",
+    body: "The dashboard exposes lighthouse-* tools via document.modelContext so browser agents can select topics, run briefs, and build custom profiles without scraping the DOM.",
+    featured: true,
+  },
   { name: "The open web", href: "https://en.wikipedia.org/wiki/RSS", role: "Source material", body: "RSS, arXiv, GitHub, HN, Reddit, YouTube transcripts — none of this works without their generous public surfaces." },
 ];
 

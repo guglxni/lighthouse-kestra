@@ -1,0 +1,30 @@
+# Kestra engine for Fly.io — Supabase Postgres + Process script runner (no Docker socket).
+FROM kestra/kestra:v0.21.0
+
+USER root
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 python3-pip python3-venv \
+        ffmpeg curl ca-certificates \
+        libpq-dev build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY scripts/requirements.txt /app/requirements.txt
+RUN pip3 install --no-cache-dir --break-system-packages -r /app/requirements.txt psycopg[binary] httpx pyyaml
+
+COPY scripts/ /app/scripts/
+COPY flows/ /app/flows/
+
+# Cloud hosts have no Docker socket — use Process runner for Python Script tasks.
+RUN find /app/flows -name '*.yaml' -print0 | xargs -0 sed -i \
+    's|io.kestra.plugin.scripts.runner.docker.Docker|io.kestra.plugin.scripts.runner.process.Process|g'
+
+ENV KESTRA_CONFIGURATION=""
+EXPOSE 8080
+
+COPY infra/fly-kestra-entrypoint.sh /fly-kestra-entrypoint.sh
+RUN chmod +x /fly-kestra-entrypoint.sh
+
+ENTRYPOINT ["/fly-kestra-entrypoint.sh"]

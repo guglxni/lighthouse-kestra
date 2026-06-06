@@ -17,8 +17,14 @@ import {
   useRole,
 } from "@floating-ui/react";
 import Link from "next/link";
-import { useMemo, useState, useTransition } from "react";
+import { useCallback, useMemo, useState, useTransition } from "react";
 import { TryBrief } from "@/components/TryBrief";
+import { BuildBrief } from "@/components/BuildBrief";
+import { WebMcpCallout, WebMcpTools } from "@/components/WebMcpTools";
+import { hasMinimumByok, readByok } from "@/lib/byok-store";
+import { DEFAULT_RUN_SCHEDULE, type RunSchedule } from "@/lib/schedule-simple";
+import { runBriefPipeline } from "@/lib/run-brief-client";
+import { formatCronSchedule } from "@/lib/format-cron";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { MagicCard } from "@/components/ui/magic-card";
@@ -115,8 +121,9 @@ function TopicCard({ topic, active, onClick }: { topic: TopicPreview; active: bo
         </span>
       </div>
       <p className="mt-2 line-clamp-3 text-sm text-ink-300">{topic.description || "Custom topic profile."}</p>
-      <p className="mt-3 font-mono text-[11px] text-beam-glow/90">
-        runs {topic.schedule ? `at ${topic.schedule}` : "on demand"}
+      <p className="mt-3 text-[11px] text-beam-glow/90">
+        {formatCronSchedule(topic.schedule)}
+        {topic.custom ? <span className="ml-2 rounded bg-violet-500/20 px-1.5 py-0.5 font-mono text-[10px] text-violet-200">custom</span> : null}
       </p>
     </button>
   );
@@ -198,6 +205,31 @@ export function LiveDashboard({
   const [data, setData] = useState(initial);
   const [pending, startTransition] = useTransition();
   const [topicId, setTopicId] = useState(userDefaultTopic ?? data.topics[0]?.id ?? "agentic-eng");
+  const [topics, setTopics] = useState(data.topics);
+
+  const addCustomTopic = useCallback((topic: { id: string; name: string; description: string; schedule?: string }) => {
+    setTopics((prev) => {
+      if (prev.some((t) => t.id === topic.id)) {
+        return prev.map((t) =>
+          t.id === topic.id
+            ? { ...t, name: topic.name, description: topic.description, schedule: topic.schedule, custom: true as const }
+            : t,
+        );
+      }
+      return [
+        ...prev,
+        {
+          id: topic.id,
+          name: topic.name,
+          description: topic.description,
+          schedule: topic.schedule,
+          custom: true as const,
+          sourceCounts: { rss: 0, arxiv: 0, github: 0, hn: 0, reddit: 0, youtube: 0, web: 0 },
+        },
+      ];
+    });
+    setTopicId(topic.id);
+  }, []);
 
   function refresh() {
     startTransition(async () => {
@@ -207,6 +239,87 @@ export function LiveDashboard({
       setData(json);
     });
   }
+
+  const selectTopic = useCallback(
+    (id: string) => {
+      if (!topics.some((t) => t.id === id)) return false;
+      setTopicId(id);
+      return true;
+    },
+    [topics],
+  );
+
+  const runSampleBrief = useCallback(
+    async ({ topicId: tid, prompt }: { topicId?: string; prompt: string }) => {
+      const byok = readByok();
+      if (!hasMinimumByok(byok)) {
+        return { ok: false, message: "Add your LLM API key in Settings first, then retry lighthouse-run-sample-brief." };
+      }
+      const activeId = tid && topics.some((t) => t.id === tid) ? tid : topicId;
+      if (tid && activeId !== topicId) setTopicId(activeId);
+      try {
+        const result = await runBriefPipeline({
+          topicId: activeId,
+          prompt,
+          byok: {
+            llmApiKey: byok.llmApiKey,
+            llmBaseUrl: byok.llmBaseUrl,
+            llmModelPrimary: byok.llmModelPrimary,
+            llmModelQuality: byok.llmModelQuality || undefined,
+          },
+          exaApiKey: byok.exaApiKey || undefined,
+          agentmail:
+            byok.agentmailApiKey && byok.agentmailInboxId
+              ? { apiKey: byok.agentmailApiKey, inboxId: byok.agentmailInboxId }
+              : undefined,
+          onStep: () => {},
+        });
+        return { ok: true, message: `Brief for topic "${activeId}":\n\n${result.output.slice(0, 2000)}` };
+      } catch (e) {
+        return { ok: false, message: e instanceof Error ? e.message : String(e) };
+      }
+    },
+    [topicId, topics],
+  );
+
+  const buildCustomTopic = useCallback(
+    async ({ brief, runSchedule }: { brief: string; runSchedule?: RunSchedule }) => {
+      const byok = readByok();
+      if (!hasMinimumByok(byok)) {
+        return { ok: false, message: "Add your LLM API key in Settings first, then retry lighthouse-build-topic." };
+      }
+      try {
+        const res = await fetch("/api/build-topic-yaml", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            brief,
+            runSchedule: runSchedule ?? DEFAULT_RUN_SCHEDULE,
+            byok: {
+              llmApiKey: byok.llmApiKey,
+              llmBaseUrl: byok.llmBaseUrl,
+              llmModelPrimary: byok.llmModelPrimary,
+            },
+          }),
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) return { ok: false, message: String(j.error ?? `HTTP ${res.status}`) };
+        addCustomTopic({
+          id: j.id,
+          name: j.name,
+          description: j.description ?? "",
+          schedule: j.schedule,
+        });
+        return {
+          ok: true,
+          message: `Created and activated topic "${j.name}" (${j.id}). Schedule: ${j.schedule}. Use lighthouse-run-sample-brief to draft a brief.`,
+        };
+      } catch (e) {
+        return { ok: false, message: e instanceof Error ? e.message : String(e) };
+      }
+    },
+    [addCustomTopic],
+  );
 
   return (
     <div className="relative isolate overflow-hidden">
@@ -248,7 +361,7 @@ export function LiveDashboard({
               <Button variant="secondary" onClick={refresh} disabled={pending}>
                 {pending ? "Checking…" : "Refresh status"}
               </Button>
-              <TopicPopover topics={data.topics} value={topicId} onChange={setTopicId} />
+              <TopicPopover topics={topics} value={topicId} onChange={setTopicId} />
             </div>
             <p className="text-xs text-ink-500">
               Your AI keys live in your browser. You pay your provider directly. We never see, store or proxy them.
@@ -262,19 +375,29 @@ export function LiveDashboard({
               <StatusPill
                 label="Engine"
                 ok={data.services.kestra.ok}
-                detail={data.services.kestra.ok ? "live" : "starting up"}
-                hint="The Kestra orchestrator that runs every flow. Hosted on http://localhost:8090 in dev."
+                detail={data.services.kestra.ok ? "live" : data.cloudDemo ? "required" : "starting up"}
+                hint={
+                  data.cloudDemo
+                    ? "Scheduled Kestra flows run on your self-hosted engine. This cloud UI drives BYOK sample briefs."
+                    : "The Kestra orchestrator that runs every flow. Hosted on http://localhost:8090 in dev."
+                }
               />
               <StatusPill
                 label="Library"
                 ok={data.services.postgres.ok}
-                detail={data.services.postgres.ok ? "ready" : "setup"}
-                hint="Postgres + pgvector — your documents, embeddings and briefs live here."
+                detail={
+                  data.services.postgres.ok
+                    ? data.services.postgres.source === "supabase"
+                      ? "sample briefs"
+                      : "ready"
+                    : "setup"
+                }
+                hint="Postgres + pgvector for the full pipeline. Cloud demo counts your saved sample briefs in Supabase."
               />
               <StatusPill
                 label="AI router"
-                ok={data.services.litellm.ok}
-                detail={data.services.litellm.ok ? "online" : "byok"}
+                ok={data.cloudDemo || data.services.litellm.ok}
+                detail={data.cloudDemo ? "byok ready" : data.services.litellm.ok ? "online" : "byok"}
                 hint="Optional LiteLLM proxy for server-side calls. Your own browser BYOK still works without it."
               />
             </div>
@@ -303,7 +426,7 @@ export function LiveDashboard({
               <div>
                 <dt className="text-ink-500">Briefs in library</dt>
                 <dd className="font-mono text-sm text-ink-100">
-                  {data.services.postgres.ok ? data.services.postgres.counts?.briefs ?? 0 : "—"}
+                  {data.services.postgres.ok ? (data.services.postgres.counts?.briefs ?? 0) : "—"}
                 </dd>
               </div>
               <div>
@@ -321,36 +444,50 @@ export function LiveDashboard({
       </section>
 
       <main className="relative mx-auto max-w-6xl space-y-14 px-6 pb-24">
-        {/* TryBrief — the core action */}
-        <section id="try">
-          <TryBrief
-            topics={data.topics.map((t) => ({ id: t.id, name: t.name }))}
-            defaultTopicId={topicId}
-            signedIn={signedIn}
+        {signedIn ? (
+          <WebMcpTools
+            handlers={{ topics, topicId, selectTopic, runSampleBrief, buildCustomTopic }}
           />
-        </section>
+        ) : null}
 
-        {/* Topic gallery */}
+        {/* Topics first — drives sample brief dropdown */}
         <section id="topics" className="space-y-5">
           <header className="flex items-end justify-between gap-3">
             <div>
               <Badge variant="beam">Topics</Badge>
               <h2 className="mt-2 font-display text-2xl text-ink-50">Pick what to track</h2>
               <p className="mt-1 max-w-xl text-sm text-ink-400">
-                Click a card to make it active. Generate a brief from it on the right.
+                Click a card to select your active topic — it syncs to <strong className="font-normal text-ink-200">Generate a sample brief</strong> below.
               </p>
             </div>
-            <Tip label="Topics live as YAML in flows/_namespace_files/topics/. Add a file → a new daily brief appears.">
+            <Tip label="Preset topics ship with Lighthouse. Custom topics you build are saved to your account and used automatically for sample briefs.">
               <span className="inline-flex rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] text-ink-400">
                 What’s a topic profile?
               </span>
             </Tip>
           </header>
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {data.topics.map((t) => (
+            {topics.map((t) => (
               <TopicCard key={t.id} topic={t} active={t.id === topicId} onClick={() => setTopicId(t.id)} />
             ))}
           </div>
+        </section>
+
+        <section id="try">
+          <TryBrief
+            topics={topics.map((t) => ({ id: t.id, name: t.name }))}
+            topicId={topicId}
+            onTopicChange={setTopicId}
+            signedIn={signedIn}
+          />
+        </section>
+
+        <section id="build">
+          <BuildBrief signedIn={signedIn} onTopicCreated={addCustomTopic} />
+        </section>
+
+        <section id="agents">
+          <WebMcpCallout variant="dashboard" />
         </section>
 
         {/* Channels */}
@@ -363,10 +500,25 @@ export function LiveDashboard({
             </p>
           </header>
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-            <ChannelCard name="Email" glyph="✉" detail="Daily digest with the headline and reading list." />
-            <ChannelCard name="Slack" glyph="#" detail="Posted to a channel via incoming webhook." />
-            <ChannelCard name="Discord" glyph="◆" detail="Same shape, different surface." />
-            <ChannelCard name="Notion" glyph="¶" detail="One page per day, archived for search." />
+            <ChannelCard
+              name="Email"
+              glyph="✉"
+              detail="AgentMail inbox API — styled digest to your address. BYOK via authsome or paste key in Settings."
+              href="https://docs.agentmail.to/llms.txt"
+            />
+            <ChannelCard
+              name="Slack"
+              glyph="#"
+              detail="OAuth via authsome or incoming webhook. Brief auto-converts to Slack mrkdwn."
+              href="https://authsome.ai/docs/integrations/oauth/slack"
+            />
+            <ChannelCard name="Discord" glyph="◆" detail="Incoming webhook — Markdown renders natively." />
+            <ChannelCard
+              name="Notion"
+              glyph="¶"
+              detail="OAuth via authsome — append daily blocks to a workspace page."
+              href="https://authsome.ai/docs/integrations/oauth/notion"
+            />
           </div>
         </section>
 
@@ -393,7 +545,7 @@ export function LiveDashboard({
   );
 }
 
-function ChannelCard({ name, detail, glyph }: { name: string; detail: string; glyph: string }) {
+function ChannelCard({ name, detail, glyph, href }: { name: string; detail: string; glyph: string; href?: string }) {
   return (
     <MagicCard className="rounded-2xl p-4" gradientFrom="#7dd3fc" gradientTo="#a78bfa">
       <div className="flex items-center gap-2">
@@ -403,6 +555,11 @@ function ChannelCard({ name, detail, glyph }: { name: string; detail: string; gl
         <div className="text-sm font-semibold text-ink-50">{name}</div>
       </div>
       <p className="mt-2 text-xs text-ink-400">{detail}</p>
+      {href ? (
+        <a href={href} target="_blank" rel="noreferrer" className="mt-2 inline-block text-[11px] text-beam hover:underline">
+          Integration docs ↗
+        </a>
+      ) : null}
     </MagicCard>
   );
 }

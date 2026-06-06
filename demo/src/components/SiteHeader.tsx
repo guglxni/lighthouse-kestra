@@ -7,7 +7,6 @@ import { useEffect, useState } from "react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { FloatingHoverCard } from "@/components/ui/floating-card";
 
 const navItems = [
   { href: "/", label: "Home", public: true, tip: "Overview, topic previews, and the one-minute setup." },
@@ -67,25 +66,19 @@ export function SiteHeader({ initialEmail }: { initialEmail: string | null }) {
           {navItems
             .filter((n) => (n.auth ? Boolean(email) : true))
             .map((n) => (
-              <FloatingHoverCard
+              <Link
                 key={n.href}
-                placement="bottom"
-                trigger={
-                  <Link
-                    href={n.href}
-                    className={cn(
-                      "rounded-lg px-3 py-1.5 text-sm transition",
-                      pathname === n.href || (n.href !== "/" && pathname?.startsWith(n.href))
-                        ? "bg-white/10 text-ink-50"
-                        : "text-ink-300 hover:bg-white/5 hover:text-ink-50",
-                    )}
-                  >
-                    {n.label}
-                  </Link>
-                }
+                href={n.href}
+                title={n.tip}
+                className={cn(
+                  "rounded-lg px-3 py-1.5 text-sm transition",
+                  pathname === n.href || (n.href !== "/" && pathname?.startsWith(n.href))
+                    ? "bg-white/10 text-ink-50"
+                    : "text-ink-300 hover:bg-white/5 hover:text-ink-50",
+                )}
               >
-                <p className="text-xs text-ink-300">{n.tip}</p>
-              </FloatingHoverCard>
+                {n.label}
+              </Link>
             ))}
         </nav>
         <div className="flex items-center gap-2">

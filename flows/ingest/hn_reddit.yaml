@@ -180,11 +180,29 @@ tasks:
     message: "hn_reddit ingest topic={{ inputs.topic_id }} inserted_rows={{ outputs.insert_documents.size ?? 0 }}"
 
 triggers:
-  - id: schedule
+  - id: schedule_agentic_eng
     type: io.kestra.plugin.core.trigger.Schedule
     cron: "*/30 * * * *"
     inputs:
       topic_id: agentic-eng
+
+  - id: schedule_solana_zk
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "*/30 * * * *"
+    inputs:
+      topic_id: solana-zk
+
+  - id: schedule_indie_saas
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "*/30 * * * *"
+    inputs:
+      topic_id: indie-saas
+
+  - id: schedule_data_eng_ai
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "*/30 * * * *"
+    inputs:
+      topic_id: data-eng-ai
 
 errors:
   - id: log_failure

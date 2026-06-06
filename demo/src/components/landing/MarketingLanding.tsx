@@ -91,7 +91,7 @@ export function MarketingLanding({
                 delay={0.4}
                 className="mx-auto mt-6 max-w-2xl text-lg text-ink-300 sm:text-xl"
               >
-                Pick a topic. Bring your own AI key. Get a single, focused brief on the things you care about — in your inbox, Slack, Discord or Notion. Stop drowning in tabs.
+                Pick a topic. Bring your own AI key. Get a single, focused brief on the things you care about — in your inbox, Slack, Discord, Telegram or Notion. Stop drowning in tabs.
               </TextAnimate>
 
               <motion.div
@@ -100,11 +100,12 @@ export function MarketingLanding({
                 transition={{ duration: 0.6, delay: 0.9 }}
                 className="mt-10 flex flex-wrap items-center justify-center gap-3"
               >
-                <ShimmerButton onClick={() => undefined} className="shadow-[0_18px_45px_rgba(56,189,248,0.35)]">
-                  <Link href={signedIn ? "/dashboard" : "/signup"} className="inline-flex items-center gap-2">
-                    <span>{signedIn ? "Open dashboard" : "Start free"}</span>
-                    <span aria-hidden>→</span>
-                  </Link>
+                <ShimmerButton
+                  href={signedIn ? "/dashboard" : "/signup"}
+                  className="shadow-[0_18px_45px_rgba(56,189,248,0.35)]"
+                >
+                  <span>{signedIn ? "Open dashboard" : "Start free"}</span>
+                  <span aria-hidden>→</span>
                 </ShimmerButton>
                 <Button variant="secondary" size="lg" asChild>
                   <Link href="/tech">See how it works</Link>
@@ -258,14 +259,14 @@ export function MarketingLanding({
                 <FeatureCard
                   glyph="⊙"
                   title="Lives where you read"
-                  body="Email, Slack, Discord, Notion. Webhooks in, briefs out. Skip the channels you don’t use — Lighthouse doesn’t care."
+                  body="Email, Slack, Discord, Telegram, Notion. Each brief is formatted for its destination — Slack mrkdwn, Telegram HTML, styled email. Skip channels you don’t use."
                 />
               </div>
             }
           >
             <p className="font-display text-base text-ink-50">Channels are optional</p>
             <p className="mt-1.5 text-xs text-ink-400">
-              Set any combination. Empty fields are silently skipped. Each channel is just an HTTPS webhook configured in your account.
+              Set any combination. Empty fields are silently skipped. Each brief is auto-formatted for its channel — Slack mrkdwn, Telegram HTML, styled email, Discord native MD.
             </p>
           </FloatingHoverCard>
 
@@ -379,9 +380,11 @@ sources:
   reddit_subs: [LocalLLaMA]
 
 deliver:
-  email:   you@studio.com
-  slack:   $SLACK_WEBHOOK
-  notion:  $NOTION_PAGE_ID`}
+  email:    you@studio.com
+  slack:    $SLACK_WEBHOOK
+  discord:  $DISCORD_WEBHOOK
+  telegram: $TELEGRAM_CHAT_ID
+  notion:   $NOTION_PAGE_ID`}
                 </pre>
               </div>
             </div>
@@ -486,19 +489,16 @@ deliver:
       <section className="relative mx-auto max-w-5xl px-6 py-24">
         <FluidGlass className="px-8 py-14 text-center sm:px-16 sm:py-20">
           <BorderBeam size={240} duration={11} colorFrom="#fbbf24" colorTo="#7dd3fc" />
-          <Badge variant="beam">Free forever · Your keys, your channels</Badge>
-          <h2 className="mt-5 font-display text-3xl text-ink-50 sm:text-5xl">
+          <h2 className="font-display text-3xl text-ink-50 sm:text-5xl">
             Wake up to <AuroraText>one brief</AuroraText>, not 47 tabs.
           </h2>
           <p className="mx-auto mt-4 max-w-2xl text-base text-ink-300">
             Make a free account, paste your AI key, pick a topic, choose a channel. Your first brief takes about a minute to set up.
           </p>
           <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
-            <ShimmerButton>
-              <Link href={signedIn ? "/dashboard" : "/signup"} className="inline-flex items-center gap-2">
-                <span>{signedIn ? "Open dashboard" : "Create your free account"}</span>
-                <span aria-hidden>→</span>
-              </Link>
+            <ShimmerButton href={signedIn ? "/dashboard" : "/signup"}>
+              <span>{signedIn ? "Open dashboard" : "Create your free account"}</span>
+              <span aria-hidden>→</span>
             </ShimmerButton>
             <Button variant="ghost" asChild>
               <Link href="/tech">See how it works</Link>
@@ -533,6 +533,13 @@ deliver:
                   Under the hood
                 </Link>
               </li>
+              {signedIn ? (
+                <li>
+                  <Link href="/settings" className="hover:text-beam">
+                    Settings
+                  </Link>
+                </li>
+              ) : null}
               <li>
                 <a href="/api/dashboard" className="hover:text-beam">
                   JSON status

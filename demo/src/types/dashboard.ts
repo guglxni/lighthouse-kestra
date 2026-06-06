@@ -3,6 +3,7 @@ export type TopicPreview = {
   name: string;
   description: string;
   schedule?: string;
+  custom?: boolean;
   sourceCounts: {
     rss: number;
     arxiv: number;
@@ -26,6 +27,8 @@ export type ExecutionPreview = {
 export type DashboardPayload = {
   generatedAt: string;
   demoMode: boolean;
+  /** Vercel cloud demo — Kestra/Postgres run elsewhere; BYOK + Supabase power the UI. */
+  cloudDemo?: boolean;
   demoBanner?: string;
   envHints: {
     kestraUrl: string;
@@ -47,6 +50,7 @@ export type DashboardPayload = {
     postgres: {
       ok: boolean;
       error?: string;
+      source?: "postgres" | "supabase";
       counts?: {
         documents: number;
         embeddings: number;

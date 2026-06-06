@@ -1,0 +1,46 @@
+flowchart LR
+    subgraph SRC["Sources  (per topic profile)"]
+        direction TB
+        s1["RSS / Miniflux\nwebhook + 15 min poll"]
+        s2["arXiv\ndaily schedule"]
+        s3["GitHub Trending"]
+        s4["HN / Reddit"]
+        s5["YouTube · Podcasts\nyt-dlp + Whisper"]
+        s6["Web Articles\nTrafilatura → Jina → Playwright"]
+        s7["Exa Search"]
+    end
+
+    subgraph ING["Ingest  ·  ingest.*"]
+        direction TB
+        i1["Load topic profile\nNamespace File YAML"]
+        i2["Read KV watermark\nlast seen cursor"]
+        i3["Fetch + allowlist filter"]
+        i4["INSERT lh.documents\nON CONFLICT DO NOTHING"]
+        i5["Persist KV watermark"]
+        i1 --> i2 --> i3 --> i4 --> i5
+    end
+
+    subgraph PROC["Process  ·  process.*\nFlow-triggered on ingest SUCCESS"]
+        direction TB
+        p1["embed_dedup\ntext-embedding-3-small\ncosine dedup  ≥ 0.92"]
+        p2["classify\nrelevance · category · tags\nLiteLLM primary / fallback"]
+        p3["cluster_summarize\nMarkdown brief\nUPSERT lh.briefs"]
+        p1 --> p2 --> p3
+    end
+
+    subgraph DEL["Deliver  ·  08:00 daily schedule"]
+        d1["Discord webhook\nper-topic secret"]
+        d2["Slack webhook"]
+        d3["/api/notify\nper-user fanout\nSlack · Discord · Email · Telegram"]
+    end
+
+    subgraph SERVE["Serve  ·  serve.*"]
+        v1["chat_brief\npgvector RAG + LiteLLM"]
+        v2["deepdive\nGPT-Researcher\nin Docker"]
+    end
+
+    SRC --> ING
+    ING -- "Flow trigger\non SUCCESS" --> PROC
+    PROC -- "08:00 schedule" --> DEL
+    DEL --> d1 & d2 & d3
+    PROC -.-> SERVE
